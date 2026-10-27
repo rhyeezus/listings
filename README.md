@@ -36,7 +36,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos, the ad description and the map position on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
 
-**Domain, from a browser (the normal way):** Domain blocks requests from servers, so the scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
+**Domain, from a browser (works without an API key):** Domain's website blocks requests from servers, so this scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
 1. Open the app (local or deployed) and sign in, so it has the passcode.
 2. In another tab, open any www.domain.com.au page, paste `scripts/domain-rescan.js` into the console, and run `await domainRescan()` (about 1.5 seconds per listing; progress is in `window.__rescan`). Keep `DOMAIN_SEARCH` at the top of the script in step with the `Search` tab.
 3. Run `domainRescanHandoff('<app url>')`. That tab opens the app, which imports the scan and shows a summary.
@@ -46,7 +46,17 @@ The import merges like a full scan:
 - Domain listings that no longer show up are marked `gone`; realestate.com.au and other listings never are
 - if any listing page failed to load, or the scan returned under 60% of the active Domain listings, nothing is marked gone
 
-**Domain API (needs a paid key):** `Code.gs` can also search through Domain's official API, which would make the app's **Rescan** button, **Rental → Rescan Domain now** and **Rental → Turn on daily rescan** work on their own. Domain's Agents & Listings package is "contact for price" with a business profile, so this is dormant: it only runs if `DOMAIN_API_KEY` (or `DOMAIN_CLIENT_ID` + `DOMAIN_CLIENT_SECRET`) is set in Script properties.
+**Domain, automatically (through Domain's API):** `Code.gs` can search Domain's official API itself, so no browser is needed. Once it's set up, the app's **Rescan** button and **Rental → Rescan Domain now** work on their own, and **Rental → Turn on automatic rescans** checks Domain every 3 hours. It merges like the browser scan, including the gone check and the 60% rule.
+- A listing new to the sheet gets one more call for its full ad text, availability and bond (at most 40 a run, to spare the daily allowance).
+- Listings already in the sheet keep their photos and description, so the browser scan's phone-sized photos aren't replaced. Photos from the API are Domain's full-size originals.
+
+Domain doesn't publish a free plan for listing search, so check what your project gets before relying on it. To set it up:
+1. Sign up at [developer.domain.com.au](https://developer.domain.com.au) (**Get started**: GitHub, Google or email).
+2. **Projects → Create Project**. Under **API Access**, check that **Agents & Listings** is on the project, and note its plan and daily allowance. If adding it asks for payment or a sales contact, stop: keep using the browser rescan.
+3. **Credentials → Create OAuth Client**, choose **Client Credentials**, then add a client secret.
+4. In Apps Script, **Project Settings → Script properties**, add `DOMAIN_CLIENT_ID` and `DOMAIN_CLIENT_SECRET` (an API key in `DOMAIN_API_KEY` works instead).
+5. Reload the sheet and run **Rental → Check Domain API access**. It runs the saved search once without changing the sheet, and shows how many listings came back and the plan's allowance. If Domain refuses, the plan doesn't include listing search.
+6. Run **Rental → Rescan Domain now**, check the sheet, then **Rental → Turn on automatic rescans**. If a run fails, Google emails you.
 
 **realestate.com.au, from its alert emails:** realestate.com.au has no API, but its saved-search alerts email you each new listing. `Code.gs` reads those emails from the Gmail of the account that owns the sheet and adds the listings that aren't already there (matched on address, so a listing that's also on Domain isn't added twice). It only reads mail; nothing is labelled, moved or deleted. To set it up:
 1. On realestate.com.au, sign in with the **same Google account that owns the sheet** (the alerts have to land in that Gmail).

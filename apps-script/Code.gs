@@ -11,9 +11,10 @@
  *
  * Script properties (Project Settings > Script properties):
  *   PASSCODE              the shared code you and your partner type into the app once.
- *   DOMAIN_API_KEY        for automatic rescans (developer.domain.com.au, Agents & Listings package), or
  *   DOMAIN_CLIENT_ID +
- *   DOMAIN_CLIENT_SECRET  the OAuth client credentials for the same project instead of a key.
+ *   DOMAIN_CLIENT_SECRET  for automatic rescans: the OAuth client (Client Credentials) of a project on
+ *                         developer.domain.com.au with the Agents & Listings API, or
+ *   DOMAIN_API_KEY        an API key for the same project instead.
  *   REA_SEEN              set by the realestate.com.au alert import: the alert emails it has already read.
  *
  * realestate.com.au listings come from its saved-search alert emails in the owner's Gmail (Rental > Preview /
@@ -49,9 +50,10 @@ function onOpen() {
     .addItem('Merge inbox (keep missing listings)', 'mergeInboxPartial')
     .addItem('Merge inbox (full scan: mark missing as gone)', 'mergeInboxFull')
     .addSeparator()
+    .addItem('Check Domain API access', 'checkDomainApi')
     .addItem('Rescan Domain now', 'rescanFromMenu')
-    .addItem('Turn on daily rescan (7am)', 'enableDailyRescan')
-    .addItem('Turn off daily rescan', 'disableDailyRescan')
+    .addItem('Turn on automatic rescans (every 3 hours)', 'enableAutoRescan')
+    .addItem('Turn off automatic rescans', 'disableAutoRescan')
     .addSeparator()
     .addItem('Preview realestate.com.au alerts', 'previewReaAlerts')
     .addItem('Import realestate.com.au alerts now', 'reaAlertsFromMenu')
@@ -62,17 +64,20 @@ function onOpen() {
     .addToUi();
 }
 
+function checkDomainApi() { SpreadsheetApp.getUi().alert(checkDomainApi_()); }
 function rescanFromMenu() {
   const res = rescan_();
-  SpreadsheetApp.getUi().alert(res.ok ? `Rescan done: ${res.added} new, ${res.updated} updated, ${res.gone} marked gone.` : res.message);
+  SpreadsheetApp.getUi().alert(res.ok ? `Rescan done: ${res.added} new, ${res.updated} updated, ${res.gone} marked gone` +
+    (res.goneChecked ? '.' : ' (gone check skipped: the scan looked partial).') : res.message);
 }
-function enableDailyRescan() {
-  disableDailyRescan();
-  ScriptApp.newTrigger('dailyRescan').timeBased().everyDays(1).atHour(7).inTimezone('Australia/Melbourne').create();
-  SpreadsheetApp.getUi().alert('Daily rescan is on: every morning around 7am.');
+function enableAutoRescan() {
+  if (!domainConfigured_()) { SpreadsheetApp.getUi().alert(NOT_CONFIGURED); return; }
+  disableAutoRescan();
+  ScriptApp.newTrigger('autoRescan').timeBased().everyHours(3).create();
+  SpreadsheetApp.getUi().alert('Automatic rescans are on: Domain is checked every 3 hours. If one fails, Google emails you.');
 }
-function disableDailyRescan() {
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyRescan').forEach(t => ScriptApp.deleteTrigger(t));
+function disableAutoRescan() {
+  ScriptApp.getProjectTriggers().filter(t => ['autoRescan', 'dailyRescan'].indexOf(t.getHandlerFunction()) >= 0).forEach(t => ScriptApp.deleteTrigger(t));
 }
 
 /* ---------------- web API ---------------- */
@@ -106,14 +111,19 @@ function importScan_(b) {
     IMPORT_FIELDS.forEach(f => { if (r[f] !== undefined && r[f] !== null) o[f] = typeof r[f] === 'number' ? r[f] : String(r[f]).slice(0, MAX_LENGTH[f] || 2000); });
     return o;
   }).filter(r => r.id && String(r.listing_url || '').indexOf('https://www.domain.com.au/') === 0);
-  // Only suburbs on the Search tab (Domain pads searches with surrounding suburbs).
+  return mergeDomainScan_(rows, b.full === true);
+}
+
+// A Domain scan (from a browser or the API) into the sheet. Only suburbs on the Search tab are kept (Domain pads
+// searches with surrounding suburbs), and nothing is marked gone if the scan looks partial (fewer than 60% of the
+// active Domain listings).
+function mergeDomainScan_(rows, full) {
   const suburbs = readSearch_().suburbs.map(s => s.toLowerCase());
   const inArea = rows.filter(r => suburbs.indexOf(String(r.suburb || '').toLowerCase()) >= 0);
-  // Don't mark anything gone if the scan looks partial (fewer than 60% of the active Domain listings).
   const active = readListings_().rows.filter(r => r.status !== 'gone' && String(r.listing_url).includes('domain.com.au')).length;
-  const full = b.full === true && inArea.length >= active * 0.6;
-  const res = mergeListings_(inArea, full, 'domain.com.au');
-  res.goneChecked = full;
+  const goneChecked = full && inArea.length >= active * 0.6;
+  const res = mergeListings_(inArea, goneChecked, 'domain.com.au');
+  res.goneChecked = goneChecked;
   res.outOfArea = rows.length - inArea.length;
   return res;
 }
@@ -181,10 +191,23 @@ function writeVote_(b) {
 }
 
 /* ---------------- rescan (Domain API) ---------------- */
+// Rescans that run from here, through Domain's official API: Rental > Rescan Domain now, the automatic rescans and
+// the app's Rescan button. They only run once Domain credentials are in Script properties.
 const DOMAIN_SEARCH = 'https://api.domain.com.au/v1/listings/residential/_search';
+const DOMAIN_LISTING = 'https://api.domain.com.au/v1/listings/';
+// A listing new to the sheet gets one more call for its full ad text, availability and bond: at most this many a
+// run, to spare the plan's daily allowance (the rest are picked up by the next run).
+const DETAIL_LIMIT = 40;
+const NOT_CONFIGURED = 'Automatic rescans aren’t set up yet: add DOMAIN_CLIENT_ID and DOMAIN_CLIENT_SECRET (from developer.domain.com.au) in Project Settings > Script properties, then run Rental > Check Domain API access. Until then, ask Claude to rescan Domain from a browser.';
 const POSTCODES = { 'Elwood': '3184', 'St Kilda': '3182', 'St Kilda East': '3183', 'St Kilda West': '3182',
   'Balaclava': '3183', 'Ripponlea': '3185', 'Elsternwick': '3185', 'Gardenvale': '3185', 'Brighton': '3186',
   'Brighton East': '3187', 'Prahran': '3181', 'Windsor': '3181', 'Black Rock': '3193' };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function domainConfigured_() {
+  const p = PropertiesService.getScriptProperties();
+  return !!(p.getProperty('DOMAIN_API_KEY') || (p.getProperty('DOMAIN_CLIENT_ID') && p.getProperty('DOMAIN_CLIENT_SECRET')));
+}
 
 // Auth headers for Domain's API, or null when no credentials are set.
 function domainHeaders_() {
@@ -202,6 +225,15 @@ function domainHeaders_() {
   return { Authorization: 'Bearer ' + JSON.parse(res.getContentText()).access_token };
 }
 
+// A GET (no body) or POST (body) to Domain's API. Anything but a 200 throws, with Domain's own message.
+function domainFetch_(url, headers, body) {
+  const opts = { headers, muteHttpExceptions: true };
+  if (body) Object.assign(opts, { method: 'post', contentType: 'application/json', payload: JSON.stringify(body) });
+  const res = UrlFetchApp.fetch(url, opts);
+  if (res.getResponseCode() !== 200) throw new Error('Domain API ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+  return res;
+}
+
 // The saved search on the Search tab (Setting / Value rows).
 function readSearch_() {
   const o = {};
@@ -215,35 +247,74 @@ function readSearch_() {
   };
 }
 
+// The saved search as the API's request body, one page of 100 listings.
+function searchBody_(page) {
+  const s = readSearch_();
+  return {
+    listingType: 'Rent', minBedrooms: s.beds, maxBedrooms: s.beds, maxPrice: s.maxPrice,
+    excludeDepositTaken: s.excludeDepositTaken, pageSize: 100, pageNumber: page,
+    locations: s.suburbs.map(sub => ({ state: 'VIC', suburb: sub, postCode: POSTCODES[sub] || '', includeSurroundingSuburbs: false }))
+  };
+}
+
+// Rental > Check Domain API access: signs in and runs the saved search once, without changing the sheet.
+function checkDomainApi_() {
+  if (!domainConfigured_()) return NOT_CONFIGURED;
+  let res;
+  try { res = domainFetch_(DOMAIN_SEARCH, domainHeaders_(), searchBody_(1)); }
+  catch (err) { return 'Domain didn’t allow the search. ' + (err.message || err) + '\n\nIf that mentions the plan, scope or access, the project’s plan doesn’t include listing search.'; }
+  const n = JSON.parse(res.getContentText()).length, h = res.getAllHeaders();
+  const quota = Object.keys(h).filter(k => /quota|ratelimit|total-count/i.test(k)).map(k => `${k}: ${h[k]}`);
+  return `Domain’s API works: the saved search found ${n === 100 ? '100 or more' : n} listings.` + (quota.length ? '\n\n' + quota.join('\n') : '');
+}
+
 // Every current listing matching the saved search, shaped like Listings rows. null = not set up.
+// A listing already in the sheet with a description keeps its photos (a browser scan's are sized for phones); one new
+// to the sheet, or still without a description, gets its details call.
 function fetchScanResults_() {
   const headers = domainHeaders_();
   if (!headers) return null;
-  const s = readSearch_();
-  const body = {
-    listingType: 'Rent', minBedrooms: s.beds, maxBedrooms: s.beds, maxPrice: s.maxPrice,
-    excludeDepositTaken: s.excludeDepositTaken, pageSize: 100,
-    locations: s.suburbs.map(sub => ({ state: 'VIC', suburb: sub, postCode: POSTCODES[sub] || '', includeSurroundingSuburbs: false }))
-  };
   const out = [];
   for (let page = 1; page <= 10; page++) { // the API stops at 1000 results
-    body.pageNumber = page;
-    const res = UrlFetchApp.fetch(DOMAIN_SEARCH, { method: 'post', contentType: 'application/json', headers, payload: JSON.stringify(body), muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) throw new Error('Domain search failed (' + res.getResponseCode() + '): ' + res.getContentText().slice(0, 200));
-    const items = JSON.parse(res.getContentText());
+    const items = JSON.parse(domainFetch_(DOMAIN_SEARCH, headers, searchBody_(page)).getContentText());
     items.forEach(it => {
       if (it.type === 'PropertyListing' && it.listing) out.push(domainRow_(it.listing));
       else if (it.type === 'Project') (it.listings || []).forEach(l => out.push(domainRow_(l)));
     });
-    if (items.length < body.pageSize) break;
+    if (items.length < 100) break;
   }
+  // Rows already in the sheet, by id and, for Domain rows, by the listing number that ends the id (in case the API's
+  // slug ever differs from the website's).
+  const byId = {}, byNumber = {};
+  readListings_().rows.forEach(r => {
+    byId[String(r.id)] = r;
+    const m = String(r.id).match(/-(\d{6,})$/);
+    if (m && isDomain_(r.listing_url)) byNumber[m[1]] = r;
+  });
+  const suburbs = readSearch_().suburbs.map(s => s.toLowerCase());
+  let details = 0;
+  out.forEach(row => {
+    const known = byId[row.id] || byNumber[row.domainId];
+    if (known && isDomain_(known.listing_url)) { row.id = String(known.id); row.listing_url = known.listing_url; }
+    if (known && String(known.description || '').trim()) { delete row.photos; delete row.photos_large; return; }
+    // Outside the Search tab's suburbs: dropped by the merge, so not worth a call.
+    if (details >= DETAIL_LIMIT || suburbs.indexOf(row.suburb.toLowerCase()) < 0) return;
+    details++;
+    try { Object.assign(row, domainDetails_(JSON.parse(domainFetch_(DOMAIN_LISTING + row.domainId, headers).getContentText()))); }
+    catch (err) { /* keep what the search gave; the next run tries again */ }
+  });
   return out;
 }
 
 const PROPERTY_TYPES = { ApartmentUnitFlat: 'Apartment/unit', House: 'House (per Domain)', Townhouse: 'Townhouse', SemiDetached: 'Semi-detached', Studio: 'Studio', Villa: 'Villa' };
 const titleCase_ = s => String(s || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+// A listing's photo URLs, one per line. Domain's API links to the full-size originals (bucket-api.domain.com.au,
+// redirecting to b.domainstatic.com.au), so the same list serves the cards and the photo viewer.
+const domainPhotos_ = media => (media || []).filter(m => m.url && /image|photo/i.test(m.category || m.type || '') && !/floor/i.test(m.type || ''))
+  .map(m => m.url).join('\n');
 
 // One Domain API listing as a Listings row. Flooring, level and outdoor space are read from the ad text.
+// domainId (Domain's listing number) isn't a column: it's for the details call.
 function domainRow_(l) {
   const d = l.propertyDetails || {};
   const text = [l.headline, l.summaryDescription, (d.features || []).join(' ')].join(' ').toLowerCase();
@@ -254,8 +325,10 @@ function domainRow_(l) {
   const outdoor = [/courtyard/.test(text) && (/(shared|communal) courtyard/.test(text) ? 'Shared courtyard' : 'Courtyard'),
     /garden/.test(text) && (/communal garden/.test(text) ? 'Communal garden' : 'Garden'), /balcon/.test(text) && 'Balcony'].filter(Boolean);
   const slug = l.listingSlug || String(l.id);
+  const photos = domainPhotos_(l.media);
   return {
     id: slug,
+    domainId: String(l.id || ''),
     address: street ? (d.unitNumber ? d.unitNumber + '/' : '') + street : String(d.displayableAddress || '').split(',')[0],
     suburb: titleCase_(d.suburb),
     price: price ? Number(price) : '',
@@ -266,12 +339,27 @@ function domainRow_(l) {
     outdoor: outdoor.join(', '),
     pets: (d.features || []).some(f => /pet/i.test(f)) ? 'Yes' : '',
     inspections: ((l.inspectionSchedule || {}).times || []).map(t => inspection_(t.openingTime, t.closingTime)).join('; '),
+    available: available_(l.dateAvailable),
     agency: (l.advertiser || {}).name || '',
-    photo_url: ((l.media || []).find(m => m.category === 'Image') || {}).url || '',
+    photo_url: photos.split('\n')[0],
+    photos, photos_large: photos,
     listing_url: 'https://www.domain.com.au/' + slug,
     lat: d.latitude || '', lng: d.longitude || '',
     source: 'Domain'
   };
+}
+
+// The extra fields from a listing's details call (GET /v1/listings/{id}): the full ad text, every photo,
+// availability and bond.
+function domainDetails_(d) {
+  const o = {};
+  const text = String(d.description || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+  if (text) o.description = text.slice(0, MAX_LENGTH.description);
+  const photos = domainPhotos_(d.media);
+  if (photos) { o.photos = photos; o.photos_large = photos; }
+  if (d.dateAvailable) o.available = available_(d.dateAvailable);
+  if (Number(d.bond) > 0) o.bond = Number(d.bond);
+  return o;
 }
 
 // "2026-10-30T16:00:00", "2026-10-30T16:10:00" -> "Fri 30 Oct, 4pm - 4:10pm" (times are local; any offset is ignored).
@@ -279,20 +367,31 @@ function inspection_(from, to) {
   const t = s => { const m = String(s).match(/T(\d{2}):(\d{2})/); const h = +m[1]; return (h % 12 || 12) + (m[2] === '00' ? '' : ':' + m[2]) + (h >= 12 ? 'pm' : 'am'); };
   const [y, mo, d] = String(from).slice(0, 10).split('-').map(Number);
   const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
-  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][mo - 1];
-  return `${wd} ${d} ${mon}, ${t(from)} - ${t(to)}`;
+  return `${wd} ${d} ${MONTHS[mo - 1]}, ${t(from)} - ${t(to)}`;
+}
+
+// "2026-11-03T00:00:00" -> "03 Nov 2026", or "Now" once that day has come (the browser scan's format).
+function available_(iso) {
+  const m = String(iso || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  if (m[0] <= Utilities.formatDate(new Date(), 'Australia/Melbourne', 'yyyy-MM-dd')) return 'Now';
+  return `${m[3]} ${MONTHS[+m[2] - 1]} ${m[1]}`;
 }
 
 function rescan_() {
   let results;
-  try { results = fetchScanResults_(); } catch (err) { return { ok: false, error: 'scan_failed', message: String(err.message || err) }; }
-  if (!results) return { ok: false, error: 'not_configured', message: 'Rescans run from a browser: ask Claude to rescan Domain. (Domain’s API needs a paid key, so the button can’t do it on its own.)' };
+  try { results = fetchScanResults_(); } catch (err) { return { ok: false, error: 'scan_failed', message: 'The rescan failed: ' + String(err.message || err) }; }
+  if (!results) return { ok: false, error: 'not_configured', message: NOT_CONFIGURED };
   if (!results.length) return { ok: false, error: 'empty_scan', message: 'Domain returned no listings, so nothing was changed. Check the Search tab.' };
-  return mergeListings_(results, true, 'domain.com.au');
+  return mergeDomainScan_(results, true);
 }
 
-// Daily trigger target (Rental > Turn on daily rescan).
-function dailyRescan() { rescan_(); }
+// Trigger target (Rental > Turn on automatic rescans). A failed run throws, so Google emails the script's owner.
+function autoRescan() {
+  const res = rescan_();
+  if (!res.ok) throw new Error(res.message);
+}
+function dailyRescan() { autoRescan(); } // the trigger name used before automatic rescans
 
 function mergeInboxPartial() { mergeInbox_(false); }
 function mergeInboxFull() { mergeInbox_(true); }
