@@ -20,18 +20,19 @@ const INBOX = 'Inbox';
 const VOTERS = ['rhys', 'partner'];
 const VOTES = ['yes', 'maybe', 'no', ''];
 
-// Columns missing from the Listings tab (photos and description came later) are added to the end of its
+// Columns missing from the Listings tab (photos, description and photos_large came later) are added to the end of its
 // header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
 const COLUMNS = [
   'id', 'address', 'suburb', 'price', 'bond', 'type', 'beds', 'flooring', 'level', 'outdoor',
   'pets', 'inspections', 'available', 'agency', 'notes', 'photo_url', 'listing_url', 'lat', 'lng',
   'source', 'added_on', 'last_seen', 'status',
   'rhys_vote', 'partner_vote', 'rhys_note', 'partner_note',
-  'photos', 'description'
+  'photos', 'description', 'photos_large'
 ];
 // Columns a rescan refreshes on an existing row whenever the scan has a value.
-// photos: the listing's photo URLs, one per line. description: the ad text.
-const SCAN_FIELDS = ['price', 'inspections', 'available', 'agency', 'listing_url', 'photos', 'description'];
+// photos: the listing's photo URLs (card-sized), one per line. photos_large: the same photos uncropped and full
+// size, for the app's photo viewer. description: the ad text. lat/lng: Domain's own map position for the listing.
+const SCAN_FIELDS = ['price', 'inspections', 'available', 'agency', 'listing_url', 'photos', 'description', 'photos_large', 'lat', 'lng'];
 // Columns a rescan only fills when the row's cell is empty, so hand-checked details and the
 // small photo thumbnails aren't replaced by rougher scan values.
 const FILL_FIELDS = ['bond', 'type', 'beds', 'flooring', 'level', 'outdoor', 'pets', 'notes', 'photo_url'];
@@ -85,7 +86,7 @@ function doPost(e) {
 // Only listing columns are accepted; votes, notes and status are never set from a scan.
 const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$/.test(c) && ['added_on', 'last_seen', 'status'].indexOf(c) < 0);
 // Longest value kept per field (a sheet cell holds up to 50,000 characters).
-const MAX_LENGTH = { photos: 20000, description: 10000 };
+const MAX_LENGTH = { photos: 20000, description: 10000, photos_large: 20000 };
 function importScan_(b) {
   if (!Array.isArray(b.rows) || !b.rows.length || b.rows.length > 1000) return { ok: false, error: 'bad_rows', message: 'The scan had no listings, so nothing was changed.' };
   const rows = b.rows.map(r => {

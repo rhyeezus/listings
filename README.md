@@ -1,6 +1,6 @@
 # Shortlist
 
-A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day, and a filterable grid.
+A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day, a map, and a filterable grid. Tap any card for the whole listing and any photo for the full-screen viewer.
 
 ```
 Google Sheet (Listings / Inbox / Search)
@@ -34,7 +34,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Rescans
 
-The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos and the ad description on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
+The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos, the ad description and the map position on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
 
 **Domain, from a browser (the normal way):** Domain blocks requests from servers, so the scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
 1. Open the app (local or deployed) and sign in, so it has the passcode.
@@ -55,7 +55,7 @@ The import merges like a full scan:
 ## Columns
 
 `id` is the listing's stable key (Domain's URL slug). Rescans match on it.
-`photos` holds every photo URL from the listing, one per line, and `description` the ad text; the app shows both when you open a listing from Inspections. `photo_url` is the single thumbnail used in lists.
+`photos` holds every photo URL from the listing, one per line (card-sized, cropped to 4:3), `photos_large` the same photos uncropped and full size for the photo viewer, and `description` the ad text. `photo_url` is the single thumbnail used in lists. `lat`/`lng` place the listing on the map: a rescan takes them from Domain, and **Rental → Fill missing map locations** geocodes any still blank.
 Vote columns take `yes`, `maybe`, `no` or blank. The app derives:
 - **Both yes**: both voted yes
 - **Talk about it**: at least one vote, no "no"

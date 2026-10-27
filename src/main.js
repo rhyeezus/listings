@@ -29,6 +29,8 @@ const state = {
   pendingVote: '', // a vote made on the opened card, sent off once the deck is back
   gateError: '', // shown on the passcode page after a passcode is turned down
   pic: {}, // listing id -> the photo its card is showing
+  mapFilter: 'in', // which listings the map shows (MAP_FILTERS)
+  mapDay: '', // '' or a day ("Wednesday 28 Oct") to show only that day's inspections
 }
 
 const app = document.getElementById('app')
@@ -70,13 +72,21 @@ function shape(raw) {
   l.price = Number(l.price) || 0
   l.photos = String(l.photos || '').split(/\s+/).filter(Boolean) // one URL per line; listings scanned before photos were saved have only photo_url
   if (!l.photos.length && l.photo_url) l.photos = [l.photo_url]
+  // The uncropped version of each photo for the full-screen viewer, matched on Domain's file name (photos_large
+  // comes from the listing page's gallery); a photo with no match uses its card-sized version.
+  const large = String(l.photos_large || '').split(/\s+/).filter(Boolean), file = u => u.slice(u.lastIndexOf('/') + 1)
+  l.big = l.photos.map(u => large.find(b => file(b) === file(u)) || u)
   l.thumb = l.photo_url || l.photos[0] || ''
+  // Map position, ignoring anything outside Melbourne (the geocoder sometimes lands on "Australia").
+  l.geo = +l.lat < -37.5 && +l.lat > -38.3 && +l.lng > 144.5 && +l.lng < 145.6 ? [+l.lat, +l.lng] : null
   l.insp = parseInspections(l.inspections)
   l.score = score(l)
   l.isNew = l.added_on && (Date.now() - new Date(l.added_on).getTime()) < 3 * 864e5
   return l
 }
 const upcoming = l => l.insp.filter(i => i.start && i.start >= new Date())
+const dayOf = d => d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' }) // "Wednesday 28 Oct"
+const clockOf = d => (d.getHours() % 12 || 12) + (d.getMinutes() ? ':' + String(d.getMinutes()).padStart(2, '0') : '') + (d.getHours() < 12 ? 'am' : 'pm') // "9:45am"
 const nextInsp = l => upcoming(l)[0] || null
 const myVote = l => l[state.who + '_vote'] || ''
 const otherKey = () => state.who === 'rhys' ? 'partner' : 'rhys'
@@ -300,10 +310,12 @@ function swipeCard(l, i, back) {
     </div>
   </article>`
 }
-// The top swipe card opened up, in the inspection sheet's layout: every photo and detail, with the vote buttons.
-// Closing it (×, the backdrop, Escape, back) returns to the deck; voting closes it and sends the card off.
-function viewCard(l, opening) {
-  state.card = { l }
+// A listing opened up as a whole card, in the inspection sheet's layout: every photo and detail, with the vote
+// buttons. Opened from the swipe deck (from = 'swipe', the top card) or a map pin (from = 'map'). Closing it
+// (×, the backdrop, Escape, back) returns there; voting closes it too (and, on the deck, sends the card off).
+function viewCard(l, opening, from) {
+  state.card = { l, from }
+  const v = myVote(l)
   return `<div class="sheet-back" id="sheet-back"></div>
     <section class="sheet full${opening ? ' opening' : ''}" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
       <button class="sheet-x" id="sheet-x" type="button" aria-label="Close">${icon('no')}</button>
@@ -314,7 +326,7 @@ function viewCard(l, opening) {
         ${detailsBody(l, inspBlock(l) + about(l, false))}
       </div></div>
       <div class="sheet-foot">
-        <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k}" data-cv="${k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+        <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-cv="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
       </div>
     </section>`
 }
@@ -342,7 +354,7 @@ function inspRows() {
     const c = combined(l)
     if (!state.keep.has(l.id) && (c === 'out' || (state.onlyBoth && c !== 'both'))) return
     upcoming(l).forEach(i => rows.push({ l, i, c, key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`,
-      day: i.start.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' }) }))
+      day: dayOf(i.start) }))
   })
   return rows.sort((a, b) => a.i.start - b.i.start || (b.c === 'both') - (a.c === 'both'))
 }
@@ -433,6 +445,103 @@ function viewAll() {
     }).join('')}</div>` : '<p class="empty">Nothing here.</p>'}`
 }
 
+/* ---------- map ---------- */
+// Every listing with a position as a pin, coloured by where your votes stand: price on the pin, or the
+// inspection time once a day is picked (to plan a run). A pin opens a mini card; Open shows the whole card
+// (#map/<id>) to vote from. Leaflet and the map tiles only load the first time the Map tab opens.
+const MAP_FILTERS = [
+  ['in', 'Still in', l => combined(l) !== 'out'],
+  ['both', 'Both yes', l => combined(l) === 'both'],
+  ['mine', 'Needs my vote', l => !myVote(l)],
+  ['all', 'Everything', () => true],
+]
+// Days with an upcoming inspection, soonest first: [day, inspections that day].
+function mapDays() {
+  const days = new Map()
+  active().flatMap(upcoming).sort((a, b) => a.start - b.start).forEach(i => { const d = dayOf(i.start); days.set(d, (days.get(d) || 0) + 1) })
+  return [...days]
+}
+// The listings the map shows, each with its inspection on the picked day (if a day is picked).
+function mapItems() {
+  const f = (MAP_FILTERS.find(x => x[0] === state.mapFilter) || MAP_FILTERS[0])[2]
+  return active().filter(f).map(l => ({ l, insp: state.mapDay ? upcoming(l).find(i => dayOf(i.start) === state.mapDay) : null }))
+    .filter(x => !state.mapDay || x.insp)
+}
+function viewMap() {
+  const days = mapDays()
+  if (state.mapDay && !days.some(([d]) => d === state.mapDay)) state.mapDay = '' // that day has passed
+  const items = mapItems(), placed = items.filter(x => x.l.geo).length
+  const key = [['both', 'Both yes'], ['split', 'Talk about it'], ['none', 'Not voted yet'], ...(state.mapFilter === 'all' ? [['out', 'Out']] : [])]
+  return `<div class="toolbar">
+      <div class="seg" role="group" aria-label="Show">${MAP_FILTERS.map(([k, n]) => `<button type="button" data-mf="${k}" aria-pressed="${state.mapFilter === k}">${n}</button>`).join('')}</div>
+      <label class="sub map-day">Inspecting
+        <select id="map-day"><option value="">Any day</option>${days.map(([d, n]) => `<option value="${esc(d)}" ${state.mapDay === d ? 'selected' : ''}>${esc(d)} (${n})</option>`).join('')}</select>
+      </label>
+    </div>
+    <div class="map" id="map-slot"></div>
+    <div class="map-foot">
+      <div class="legend">${key.map(([c, n]) => `<span><i class="${c}"></i>${n}</span>`).join('')}</div>
+      <span class="sub">${placed} on the map${items.length > placed ? ` · ${items.length - placed} without a location yet` : ''}</span>
+    </div>`
+}
+// The map ({ L, el, map, far, pins, fitFor }) is made once, by the first render that needs it (later renders
+// share the same promise, even while it loads), and moved into each render's #map-slot.
+let mapReady = null
+const ensureMap = () => mapReady ||= makeMap()
+async function makeMap() {
+  const [{ default: L }] = await Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')])
+  const el = document.createElement('div'); el.className = 'map-canvas'
+  const map = L.map(el, { zoomSnap: 0.5 }).setView([-37.87, 144.99], 13)
+  // OpenStreetMap's own tiles (no key needed; darkened with a filter in dark mode, in the CSS).
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map)
+  // Zoomed out, the pins are dots (100-odd price labels would pile up); zoomed in to street level, or with a day
+  // picked (only that day's few), they show their labels.
+  const far = () => el.classList.toggle('far', map.getZoom() < 15 && !state.mapDay)
+  map.on('zoomend', far)
+  return { L, el, map, far, pins: L.layerGroup().addTo(map), fitFor: '' }
+}
+function placeMap() {
+  ensureMap().then(ui => {
+    const slot = $('#map-slot'); if (!slot) return // left the map while it loaded
+    slot.appendChild(ui.el)
+    ui.map.invalidateSize()
+    drawPins(ui)
+  }).catch(() => { mapReady = null; toast('The map didn’t load. Check your connection.') })
+}
+function drawPins(ui) {
+  const { L, map, pins } = ui
+  pins.clearLayers()
+  const items = mapItems().filter(x => x.l.geo)
+  items.forEach(({ l, insp }) => {
+    const c = combined(l)
+    L.marker(l.geo, {
+      icon: L.divIcon({ className: '', html: `<span class="pin ${c}">${esc(insp ? clockOf(insp.start) : money(l.price))}</span>`, iconSize: null, popupAnchor: [0, -30] }),
+      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: { both: 300, split: 200, none: 100 }[c] || 0,
+    }).bindPopup(() => pinCard(l, insp), { minWidth: 220, maxWidth: 240 }).addTo(pins)
+  })
+  // Fit the pins when the filter or day changes, not on every re-render (so a vote doesn't move the map).
+  const key = state.mapFilter + '|' + state.mapDay
+  if (ui.fitFor !== key && items.length) { map.fitBounds(L.latLngBounds(items.map(x => x.l.geo)), { padding: [40, 40], maxZoom: 15 }); ui.fitFor = key }
+  ui.far()
+}
+// The pin's mini card: photo, rent, address, inspection and votes, with Open for the whole card.
+function pinCard(l, insp) {
+  const n = insp || nextInsp(l), el = document.createElement('div')
+  el.className = 'pin-card'
+  el.innerHTML = `${l.thumb ? `<img src="${esc(l.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+    <div class="pin-body">
+      <div class="pin-price">${money(l.price)}<small> /wk</small></div>
+      <div><div class="pin-addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
+      ${n ? `<div class="pin-when">Inspect ${esc(n.label)}</div>` : ''}
+      ${votesLine(l)}
+      <button class="primary pin-open" type="button">Open</button>
+    </div>`
+  el.querySelector('.pin-open').addEventListener('click', () => { location.hash = '#map/' + encodeURIComponent(l.id) })
+  return el
+}
+
 /* ---------- shell ---------- */
 function gate() {
   const err = state.gateError
@@ -469,21 +578,24 @@ function render() {
   if (r !== 'inspections') state.keep.clear()
   const sheetKey = r === 'inspections' && sel.length === 2 ? sel.join('/') : ''
   if (sheetKey) state.keep.add(decodeURIComponent(sel[0]))
-  const cardOpen = r === 'swipe' && sel[0] === 'open'
+  // An opened card: the deck's top card (#swipe/open) or a map pin's listing (#map/<id>).
+  const cardFor = r === 'swipe' && sel[0] === 'open' ? queue()[0]
+    : r === 'map' && sel.length ? state.listings.find(l => l.id === decodeURIComponent(sel.join('/'))) : null
   const left = queue().length
   const both = active().filter(l => combined(l) === 'both').length
   const rows = r === 'inspections' ? inspRows() : []
   const view = state.loading && !state.listings.length ? '<p class="empty">Loading listings…</p>'
-    : r === 'inspections' ? viewInspections(rows) : r === 'all' ? viewAll() : viewSwipe()
+    : r === 'inspections' ? viewInspections(rows) : r === 'all' ? viewAll() : r === 'map' ? viewMap() : viewSwipe()
   const was = state.sheet, wasOpen = !!(state.sheet || state.card), sheetTop = $('.sheet-body')?.scrollTop || 0
   state.sheet = null; state.card = null
-  const sheet = sheetKey ? viewSheet(rows, sheetKey, !wasOpen) : cardOpen && queue()[0] ? viewCard(queue()[0], !wasOpen) : ''
+  const sheet = sheetKey ? viewSheet(rows, sheetKey, !wasOpen) : cardFor ? viewCard(cardFor, !wasOpen, r) : ''
   const scrollY = window.scrollY
   app.innerHTML = `<header class="bar"><div class="bar-in">
       <div class="brand">Shortlist <small>${active().length} listings</small></div>
       <nav class="tabs" aria-label="Views">
         <a href="#swipe" ${r === 'swipe' ? 'aria-current="page"' : ''}>Vote<span class="count">${left}</span></a>
         <a href="#inspections" ${r === 'inspections' ? 'aria-current="page"' : ''}>Inspections</a>
+        <a href="#map" ${r === 'map' ? 'aria-current="page"' : ''}>Map</a>
         <a href="#all" ${r === 'all' ? 'aria-current="page"' : ''}>All<span class="count">${both} both yes</span></a>
       </nav>
       <div class="who">Voting as <b style="color:var(--ink)">${VOTERS[state.who]}</b>
@@ -496,6 +608,7 @@ function render() {
   document.documentElement.classList.toggle('lock', open) // the page behind the sheet or card stays put
   if (r === 'all' || r === 'inspections') window.scrollTo(0, scrollY)
   wire()
+  if (r === 'map') placeMap()
   if (open && !wasOpen) $('#sheet').focus()
   else if (state.sheet && was?.row.key === state.sheet.row.key) $('.sheet-body').scrollTop = sheetTop
   if (!open && state.focusSel) $(state.focusSel)?.focus({ preventScroll: true })
@@ -528,6 +641,12 @@ function wire() {
     const open = !b.previousElementSibling.classList.toggle('clamp')
     b.textContent = open ? 'Show less' : 'Read more'; b.setAttribute('aria-expanded', String(open))
   }))
+  // A tap on a photo opens it full screen; on the top swipe card it opens the card, like a tap anywhere on it.
+  // (A flick through the carousel isn't a click, so it doesn't open anything.)
+  document.querySelectorAll('.sheet .pics, .grid .pics').forEach(p => p.addEventListener('click', e => { if (!e.target.closest('button')) openViewer(p.dataset.id) }))
+  $('#big .pics')?.addEventListener('click', e => { if (!e.target.closest('button')) openCard() })
+  document.querySelectorAll('[data-mf]').forEach(b => b.addEventListener('click', () => { state.mapFilter = b.dataset.mf; render() }))
+  $('#map-day')?.addEventListener('change', e => { state.mapDay = e.target.value; render() })
   wirePics()
 }
 // Every carousel on the page: back to the listing's remembered photo, then keep the counter, dots and
@@ -548,25 +667,67 @@ function wirePics() {
 }
 
 /* ---------- inspection sheet and opened card ---------- */
-// A row opens the sheet by pushing #inspections/<key>, and a tap on the top swipe card opens it by pushing
-// #swipe/open, so the phone's back button closes either. Prev and next replace the sheet's entry rather than
-// adding more, so one back still returns to the list.
+// A row opens the sheet by pushing #inspections/<key>, a tap on the top swipe card opens it by pushing
+// #swipe/open, and a map pin's card is #map/<id>, so the phone's back button closes any of them. Prev and next
+// replace the sheet's entry rather than adding more, so one back still returns to the list.
 let lastRoute = route()
 function replaceHash(h) { history.replaceState(null, '', h); lastRoute = route(); render() }
 function goSheet(row) { if (row) replaceHash('#inspections/' + row.key) }
 function openCard() { if ($('#big')) location.hash = '#swipe/open' }
 function closeOverlay() {
   if (state.sheet) state.focusSel = `.row[data-key="${CSS.escape(state.sheet.row.key)}"]`
-  else if (state.card) state.focusSel = '#more'
+  else if (state.card) state.focusSel = state.card.from === 'swipe' ? '#more' : ''
   else return
   if (state.overlayPushed) history.back()
   else replaceHash('#' + route().split('/')[0])
 }
 function cardVote(v) {
-  if (!state.card) return
-  state.pendingVote = v // render() sends the card off once the deck is back
+  const c = state.card; if (!c) return
+  if (c.from === 'swipe') state.pendingVote = v // render() sends the card off once the deck is back
+  else vote(c.l.id, myVote(c.l) === v ? '' : v)
   closeOverlay()
 }
+
+/* ---------- photo viewer ---------- */
+// One listing's photos full screen, uncropped (photos_large where a rescan has saved them), flicked or arrowed
+// through. It lives outside #app so re-renders leave it alone, and pushes a history entry of its own so the
+// phone's back button closes it. Closing leaves the card's carousel on the photo you were looking at.
+let viewer = null // { el, id, track }
+function openViewer(id) {
+  const l = state.listings.find(x => x.id === id); if (!l || !l.photos.length || viewer) return
+  const n = l.big.length, at = Math.min(state.pic[id] || 0, n - 1)
+  const el = document.createElement('div')
+  el.className = 'viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', `Photos of ${l.address}`); el.tabIndex = -1
+  el.innerHTML = `<div class="viewer-track">${l.big.map((u, j) => `<div class="viewer-slide"><img src="${esc(u)}" alt="Photo ${j + 1} of ${n}" ${Math.abs(j - at) > 1 ? 'loading="lazy"' : ''} referrerpolicy="no-referrer"></div>`).join('')}</div>
+    <span class="viewer-n" aria-live="polite">${at + 1} / ${n}</span>
+    <button class="viewer-x" type="button" aria-label="Close photos">${icon('no')}</button>
+    ${n > 1 ? '<button class="gal-arrow prev" type="button" data-vstep="-1" aria-label="Previous photo">‹</button><button class="gal-arrow next" type="button" data-vstep="1" aria-label="Next photo">›</button>' : ''}`
+  document.body.appendChild(el)
+  document.documentElement.classList.add('viewing')
+  const track = el.querySelector('.viewer-track')
+  track.scrollLeft = at * track.clientWidth
+  track.addEventListener('scroll', () => {
+    const i = Math.round(track.scrollLeft / track.clientWidth)
+    state.pic[id] = i; el.querySelector('.viewer-n').textContent = `${i + 1} / ${n}`
+  }, { passive: true })
+  el.querySelector('.viewer-x').addEventListener('click', () => history.back())
+  el.querySelectorAll('[data-vstep]').forEach(b => b.addEventListener('click', () => stepViewer(+b.dataset.vstep)))
+  viewer = { el, id, track }
+  history.pushState({ viewer: true }, '')
+  el.focus()
+}
+function stepViewer(dir) {
+  const t = viewer?.track; if (t) t.scrollBy({ left: dir * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+}
+// Runs on the history entry being popped (the back button, ×, or Escape, which all go back).
+function closeViewer() {
+  if (!viewer) return
+  const { el, id } = viewer
+  viewer = null
+  el.remove(); document.documentElement.classList.remove('viewing')
+  document.querySelectorAll(`.pics[data-id="${CSS.escape(id)}"] .pics-track`).forEach(t => { t.scrollLeft = (state.pic[id] || 0) * t.clientWidth })
+}
+window.addEventListener('popstate', () => { if (viewer) closeViewer() })
 function sheetVote(v) {
   const s = state.sheet; if (!s) return
   const next = myVote(s.row.l) === v ? '' : v
@@ -657,6 +818,11 @@ function toast(msg, ms = 4000) { // ms = 0 keeps it up until the next toast
 
 document.addEventListener('keydown', e => {
   if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+  if (viewer) {
+    if (e.key === 'Escape') { e.preventDefault(); history.back() }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); stepViewer(e.key === 'ArrowLeft' ? -1 : 1) }
+    return
+  }
   if (state.card) { if (e.key === 'Escape') { e.preventDefault(); closeOverlay() } return }
   if (state.sheet) {
     if (e.key === 'Escape') { e.preventDefault(); closeOverlay() }

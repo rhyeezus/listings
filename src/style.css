@@ -252,4 +252,52 @@ html.lock .toast { bottom: calc(env(safe-area-inset-bottom, 0px) + 128px) } /* c
 .primary { border: 0; border-radius: 10px; padding: 12px; font-weight: 700; background: var(--primary); color: var(--primary-ink) }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 14px; z-index: 20; max-width: calc(100% - 32px) }
 
-@media (prefers-reduced-motion: reduce) { .swipe-card, .sheet { transition: none !important; animation: none !important } }
+/* photo viewer: one listing's photos full screen on black, whole (not cropped), flicked or arrowed through */
+html.viewing { overflow: hidden }
+.viewer { position: fixed; inset: 0; z-index: 40; background: #000; outline: none; animation: viewer-in .18s ease-out }
+.viewer-track { display: flex; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior: contain; scrollbar-width: none }
+.viewer-track::-webkit-scrollbar { display: none }
+.viewer-slide { position: relative; flex: 0 0 100%; height: 100%; scroll-snap-align: start; scroll-snap-stop: always }
+.viewer-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none } /* fitted to the screen, whole */
+.viewer-n { position: absolute; left: 16px; top: calc(env(safe-area-inset-top, 0px) + 16px); font: 500 13px var(--f-data); color: #FFFFF0; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,240,.14) }
+.viewer-x { position: absolute; right: 12px; top: calc(env(safe-area-inset-top, 0px) + 10px); width: 40px; height: 40px; border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,240,.14); color: #FFFFF0 }
+.viewer-x svg { width: 20px; height: 20px }
+.viewer .gal-arrow { width: 44px; height: 44px; background: rgba(255,255,240,.14) }
+@keyframes viewer-in { from { opacity: 0 } }
+
+/* map */
+.map { --map-chrome: 250px; height: calc(100svh - var(--map-chrome)); min-height: 360px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--bay-soft); position: relative; z-index: 0 }
+.map-canvas { width: 100%; height: 100% }
+.map-day { display: flex; align-items: center; gap: 8px; margin: 0 }
+.map-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-top: -8px }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted) }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; background: var(--surface); border: 1.5px solid var(--muted) }
+.legend i.both { background: var(--primary); border-color: var(--primary) }
+.legend i.split { background: var(--maybe-soft); border-color: var(--maybe) }
+.legend i.out { background: var(--no-soft); border-color: var(--no) }
+/* pins: a label (price or inspection time) on a little pointer, its foot on the listing */
+.pin { position: absolute; left: 0; top: 0; transform: translate(-50%, calc(-100% - 7px)); padding: 3px 8px; border-radius: 999px; white-space: nowrap; font: 700 12px/1.3 var(--f-body); background: var(--surface); color: var(--ink); border: 1.5px solid var(--muted); box-shadow: 0 4px 10px -4px rgba(15,23,42,.6); cursor: pointer }
+.pin::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 8px; height: 8px; transform: translateX(-50%) rotate(45deg); background: inherit; border-right: inherit; border-bottom: inherit }
+.pin.both { background: var(--primary); color: var(--primary-ink); border-color: var(--primary) }
+.pin.split { background: var(--maybe-soft); color: var(--maybe); border-color: var(--maybe) }
+.pin.out { background: var(--no-soft); color: var(--no); border-color: var(--no) }
+/* zoomed out: each pin is just a dot, centred on the listing */
+.far .pin { width: 14px; height: 14px; padding: 0; font-size: 0; transform: translate(-50%, -50%); border-width: 2px }
+.far .pin::after { display: none }
+.map .leaflet-container { font: inherit; background: var(--bay-soft) }
+@media (prefers-color-scheme: dark) { .map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6) } }
+.map .leaflet-popup-content-wrapper { padding: 0; overflow: hidden; border-radius: 14px; background: var(--surface); color: var(--ink) }
+.map .leaflet-popup-tip { background: var(--surface) }
+.map .leaflet-popup-content { margin: 0 }
+.map .leaflet-container a.leaflet-popup-close-button { color: #FFFFF0; text-shadow: 0 1px 3px rgba(0,0,0,.6) }
+.pin-card img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover }
+.pin-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px }
+.pin-price { font: 800 20px/1 var(--f-display) }
+.pin-price small { font: 500 12px var(--f-body); color: var(--muted) }
+.pin-addr { font: 700 14px/1.25 var(--f-display) }
+.pin-when { font: 500 12px var(--f-data); color: var(--bay) }
+.pin-card .votes { font-size: 12px }
+.pin-open { padding: 9px; margin-top: 2px }
+@media (max-width: 600px) { .map { --map-chrome: 420px } } /* the taller header and wrapped filters above, the key below */
+
+@media (prefers-reduced-motion: reduce) { .swipe-card, .sheet, .viewer { transition: none !important; animation: none !important } }
