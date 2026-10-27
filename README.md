@@ -48,6 +48,14 @@ The import merges like a full scan:
 
 **Domain API (needs a paid key):** `Code.gs` can also search through Domain's official API, which would make the app's **Rescan** button, **Rental → Rescan Domain now** and **Rental → Turn on daily rescan** work on their own. Domain's Agents & Listings package is "contact for price" with a business profile, so this is dormant: it only runs if `DOMAIN_API_KEY` (or `DOMAIN_CLIENT_ID` + `DOMAIN_CLIENT_SECRET`) is set in Script properties.
 
+**realestate.com.au, from its alert emails:** realestate.com.au has no API, but its saved-search alerts email you each new listing. `Code.gs` reads those emails from the Gmail of the account that owns the sheet and adds the listings that aren't already there (matched on address, so a listing that's also on Domain isn't added twice). It only reads mail; nothing is labelled, moved or deleted. To set it up:
+1. On realestate.com.au, sign in with the **same Google account that owns the sheet** (the alerts have to land in that Gmail).
+2. Search **Rent** with the suburbs, bedrooms and maximum rent from the `Search` tab, save the search, and turn on its email alerts (as soon as listings are added, or daily).
+3. When the first alert has arrived, run **Rental → Preview realestate.com.au alerts** in the sheet. Google asks you to allow Gmail access the first time. Check the list looks right (if it says no listings were found, the email layout needs a tweak).
+4. Run **Rental → Import realestate.com.au alerts now**, then **Rental → Turn on hourly alert import**.
+
+Listings from alerts have one photo and no inspection times or description, and aren't marked gone automatically (the emails don't say when a place is leased). If Domain lists the same place later, the next Domain rescan takes over the row, filling in its details and keeping your votes and notes.
+
 **Manual (any site):** ask Claude or Cowork to run the saved search on the `Search` tab and paste the results into the `Inbox` tab using its column headers. Then run **Rental → Merge inbox**:
 - *keep missing listings* for a partial scan (one suburb, one page)
 - *full scan: mark missing as gone* when the scan covered the whole search

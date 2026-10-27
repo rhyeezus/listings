@@ -13,6 +13,10 @@
  *   DOMAIN_API_KEY        for automatic rescans (developer.domain.com.au, Agents & Listings package), or
  *   DOMAIN_CLIENT_ID +
  *   DOMAIN_CLIENT_SECRET  the OAuth client credentials for the same project instead of a key.
+ *   REA_SEEN              set by the realestate.com.au alert import: the alert emails it has already read.
+ *
+ * realestate.com.au listings come from its saved-search alert emails in the owner's Gmail (Rental > Preview /
+ * Import realestate.com.au alerts); see "realestate.com.au alerts" below.
  */
 
 const LISTINGS = 'Listings';
@@ -46,6 +50,11 @@ function onOpen() {
     .addItem('Rescan Domain now', 'rescanFromMenu')
     .addItem('Turn on daily rescan (7am)', 'enableDailyRescan')
     .addItem('Turn off daily rescan', 'disableDailyRescan')
+    .addSeparator()
+    .addItem('Preview realestate.com.au alerts', 'previewReaAlerts')
+    .addItem('Import realestate.com.au alerts now', 'reaAlertsFromMenu')
+    .addItem('Turn on hourly alert import', 'enableReaAlerts')
+    .addItem('Turn off alert import', 'disableReaAlerts')
     .addSeparator()
     .addItem('Fill missing map locations', 'geocodeMissing')
     .addToUi();
@@ -279,6 +288,7 @@ function mergeListings_(incoming, full, goneScope) {
     const { sheet, header, rows } = readListings_();
     const today = Utilities.formatDate(new Date(), 'Australia/Melbourne', 'yyyy-MM-dd');
     const byId = {}; rows.forEach((r, i) => byId[String(r.id)] = i);
+    const byAddress = {}; rows.forEach((r, i) => { const k = addressKey_(r.address, r.suburb); if (!(k in byAddress)) byAddress[k] = i; });
     const seen = {};
     let added = 0, updated = 0, gone = 0;
     const newRows = [];
@@ -286,6 +296,16 @@ function mergeListings_(incoming, full, goneScope) {
     incoming.forEach(n => {
       const id = String(n.id || '').trim();
       if (!id) return;
+      // A Domain listing already in the sheet from somewhere else (a realestate.com.au alert, or added by hand):
+      // it takes that row over, keeping its votes and notes, so later rescans keep it up to date.
+      const at = byAddress[addressKey_(n.address, n.suburb)];
+      if (!(id in byId) && at !== undefined && isDomain_(n.listing_url) && !isDomain_(rows[at].listing_url) && !seen[String(rows[at].id)]) {
+        ['id', 'listing_url', 'source'].forEach(f => {
+          sheet.getRange(at + 2, header.indexOf(f) + 1).setValue(n[f]);
+          rows[at][f] = n[f];
+        });
+        byId[id] = at;
+      }
       seen[id] = true;
       if (id in byId) {
         const i = byId[id], rowNum = i + 2;
@@ -328,6 +348,167 @@ function mergeListings_(incoming, full, goneScope) {
     lock.releaseLock();
   }
 }
+
+/* ---------------- realestate.com.au alerts (Gmail) ---------------- */
+// realestate.com.au has no API, but its saved-search alert emails carry each new listing's link, price, address
+// and photo. These read them from the Gmail of the account the script runs as (the sheet's owner), add listings
+// that aren't in the sheet yet (matched on address, so one already there from Domain isn't added twice), and
+// note which emails they've read in the REA_SEEN script property. They only read mail: nothing is labelled,
+// moved or deleted. An email with no listings found isn't marked read, so it's tried again after a fix.
+const REA_QUERY = 'from:realestate.com.au newer_than:21d';
+// https://www.realestate.com.au/property-apartment-vic-st+kilda-146000001 -> type, state, suburb, listing number
+const REA_LISTING = /realestate\.com\.au\/property-([a-z]+)-([a-z]{2,3})-([a-z0-9+%.'-]+?)-(\d{6,})/i;
+const REA_TYPES = { apartment: 'Apartment/unit', unit: 'Apartment/unit', flat: 'Apartment/unit', studio: 'Studio', house: 'House', townhouse: 'Townhouse', villa: 'Villa', semi: 'Semi-detached', duplex: 'Duplex' };
+
+function previewReaAlerts() { SpreadsheetApp.getUi().alert(importReaAlerts_(true).message); }
+function reaAlertsFromMenu() { SpreadsheetApp.getUi().alert(importReaAlerts_(false).message); }
+function reaAlertsHourly() { importReaAlerts_(false); }
+function enableReaAlerts() {
+  disableReaAlerts();
+  ScriptApp.newTrigger('reaAlertsHourly').timeBased().everyHours(1).create();
+  SpreadsheetApp.getUi().alert('realestate.com.au alerts will now be imported every hour.');
+}
+function disableReaAlerts() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'reaAlertsHourly').forEach(t => ScriptApp.deleteTrigger(t));
+}
+
+// dryRun: report what would be added without touching the sheet or the read list.
+function importReaAlerts_(dryRun) {
+  const props = PropertiesService.getScriptProperties();
+  const seen = JSON.parse(props.getProperty('REA_SEEN') || '[]');
+  const messages = [];
+  GmailApp.search(REA_QUERY, 0, 50).forEach(t => t.getMessages().forEach(m => {
+    if (seen.indexOf(m.getId()) < 0 && /realestate\.com\.au/i.test(m.getFrom())) messages.push(m);
+  }));
+  const found = {}, read = [];
+  let empty = 0;
+  messages.forEach(m => {
+    const listings = parseReaAlert_(m.getBody());
+    listings.forEach(r => { found[r.id] = r; });
+    if (listings.length) read.push(m.getId()); else empty++;
+  });
+
+  const suburbs = readSearch_().suburbs.map(s => s.toLowerCase());
+  const known = {};
+  readListings_().rows.forEach(r => { known[addressKey_(r.address, r.suburb)] = String(r.id); });
+  const rows = [];
+  let already = 0, outOfArea = 0;
+  Object.keys(found).forEach(id => {
+    const r = found[id], at = known[addressKey_(r.address, r.suburb)];
+    if (suburbs.indexOf(String(r.suburb).toLowerCase()) < 0) { outOfArea++; return; }
+    if (at && at !== r.id) { already++; return; } // in the sheet already, from Domain or added by hand
+    rows.push(r);
+  });
+
+  const lines = [`${messages.length} new realestate.com.au email${messages.length === 1 ? '' : 's'}, ${Object.keys(found).length} listing${Object.keys(found).length === 1 ? '' : 's'} in them.`,
+    `${already} already in the sheet, ${outOfArea} outside your Search suburbs${empty ? `, ${empty} email${empty === 1 ? '' : 's'} with no listings found` : ''}.`];
+  if (dryRun) {
+    lines.push(rows.length ? `Would add or update ${rows.length}:` : 'Nothing to add.');
+    rows.slice(0, 15).forEach(r => lines.push(`• ${r.address || '(no address found)'}, ${r.suburb}: ${r.price ? '$' + r.price + '/wk' : 'no price found'}`));
+    return { ok: true, message: lines.join('\n') };
+  }
+  const res = rows.length ? mergeListings_(rows, false) : { added: 0, updated: 0 };
+  props.setProperty('REA_SEEN', JSON.stringify(seen.concat(read).slice(-300)));
+  lines.push(`Added ${res.added}, updated ${res.updated}.`);
+  return { ok: true, added: res.added, updated: res.updated, message: lines.join('\n') };
+}
+
+// One alert email's listings. Each listing's card is the stretch of the email from its first link to the next
+// listing's: the photo, price and address are read from there. Links that go through an email click-tracker are
+// followed (without loading the page) to see which listing they lead to; account links (unsubscribe, manage
+// alerts and so on) are never followed.
+function parseReaAlert_(html) {
+  html = String(html || '');
+  const links = [], re = /<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) links.push({ at: m.index, url: m[1].replace(/&amp;/g, '&'), inner: m[2] });
+  const resolved = {}, order = [], first = {};
+  let lookups = 0;
+  links.forEach(l => {
+    let hit = l.url.match(REA_LISTING) || decodeSafe_(l.url).match(REA_LISTING);
+    if (!hit && lookups < 40 && /^https?:/i.test(l.url) && !/www\.realestate\.com\.au/i.test(l.url)
+        && !/unsubscribe|preference|manage|settings|privacy|terms|help|contact|feedback|edit|delete|pause|stop|app store|google play|facebook|instagram|twitter|youtube|linkedin/i.test(l.inner + ' ' + l.url)) {
+      if (!(l.url in resolved)) { lookups++; resolved[l.url] = followRedirects_(l.url); }
+      hit = resolved[l.url].match(REA_LISTING);
+    }
+    if (!hit) return;
+    const id = hit[4];
+    if (!(id in first)) { first[id] = l.at; order.push({ id, hit }); }
+  });
+  return order.map((o, k) => {
+    const card = html.slice(first[o.id], k + 1 < order.length ? first[order[k + 1].id] : html.length);
+    const before = html.slice(k ? first[order[k - 1].id] : 0, first[o.id]); // in case a card puts its price above its first link
+    const [, kind, state, slug] = o.hit, suburb = titleCase_(decodeSafe_(slug.replace(/\+/g, ' ')).replace(/-/g, ' '));
+    const text = textLines_(card), price = priceIn_(text) || priceIn_(textLines_(before).slice(-3));
+    const beds = (text.join(' ').match(/(\d)\s*(?:bed|bedroom)s?\b/i) || [])[1];
+    const photo = (card.match(/<img\b[^>]*?src\s*=\s*["'](https:\/\/[^"']*reastatic[^"']+)["']/i) || [])[1] || '';
+    return {
+      id: 'rea-' + o.id,
+      address: addressIn_(text, suburb),
+      suburb,
+      price: price || '',
+      type: REA_TYPES[kind.toLowerCase()] || titleCase_(kind),
+      beds: beds ? Number(beds) : '',
+      photo_url: photo.replace(/&amp;/g, '&'),
+      photos: photo.replace(/&amp;/g, '&'),
+      listing_url: `https://www.realestate.com.au/property-${kind}-${state}-${slug}-${o.id}`.toLowerCase(),
+      source: 'realestate.com.au',
+    };
+  });
+}
+
+// Where a click-tracking link ends up, following up to four redirects without loading the final page.
+function followRedirects_(url) {
+  for (let hop = 0; hop < 4; hop++) {
+    if (REA_LISTING.test(url)) return url;
+    try {
+      const res = UrlFetchApp.fetch(url, { followRedirects: false, muteHttpExceptions: true });
+      const h = res.getAllHeaders(), next = h.Location || h.location;
+      if (res.getResponseCode() < 300 || res.getResponseCode() >= 400 || !next) return '';
+      url = Array.isArray(next) ? next[0] : String(next);
+    } catch (err) { return ''; }
+  }
+  return REA_LISTING.test(url) ? url : '';
+}
+function decodeSafe_(s) { try { return decodeURIComponent(s); } catch (err) { return s; } }
+// An email's HTML as lines of text.
+function textLines_(html) {
+  return String(html).replace(/<(br|\/p|\/div|\/td|\/tr|\/h\d|\/li)\b[^>]*>/gi, '\n').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&#36;|&dollar;/gi, '$').replace(/&#0?39;|&rsquo;|&apos;/gi, "'").replace(/&#x2F;|&#47;/gi, '/')
+    .split('\n').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+// The weekly rent: the first dollar amount that looks like one ($650, $650 per week, $650pw).
+function priceIn_(lines) {
+  for (const line of lines) {
+    const m = line.replace(/,/g, '').match(/\$\s?(\d{3,4})(?!\d)/);
+    if (m && +m[1] >= 150 && +m[1] <= 5000) return Number(m[1]);
+  }
+  return null;
+}
+// The street address: the line that ends ", <suburb>" (maybe with state and postcode), or one that starts with a number.
+function addressIn_(lines, suburb) {
+  const sub = suburb.toLowerCase();
+  for (const line of lines) {
+    const i = line.toLowerCase().lastIndexOf(', ' + sub);
+    if (i > 2 && /^[,\s]*(vic\b.*)?$/i.test(line.slice(i + 2 + sub.length))) return shortStreet_(line.slice(0, i).trim());
+  }
+  const numbered = lines.find(l => /^\d+[a-z]?(\/\d+[a-z]?)?(-\d+)?\s+\S+/i.test(l) && l.length < 60 && !/\$/.test(l));
+  return numbered ? shortStreet_(numbered.split(',')[0]) : '';
+}
+const shortStreet_ = s => String(s).replace(/\bStreet\b/i, 'St').replace(/\bRoad\b/i, 'Rd').replace(/\bAvenue\b/i, 'Ave').replace(/\bParade\b/i, 'Pde');
+
+// An address as a matching key, so "Unit 2, 81 Grosvenor Street" and "2/81 Grosvenor St" (same suburb) match.
+const STREET_TYPES = { street: 'st', road: 'rd', avenue: 'ave', parade: 'pde', crescent: 'cres', court: 'ct', place: 'pl', grove: 'gr',
+  drive: 'dr', terrace: 'tce', highway: 'hwy', boulevard: 'bvd', lane: 'ln', close: 'cl', esplanade: 'esp', square: 'sq', circuit: 'cct' };
+function addressKey_(address, suburb) {
+  const a = String(address || '').toLowerCase()
+    .replace(/\b(unit|apartment|apt|flat|level|lot)\b\.?\s*/g, '')
+    .replace(/^(\d+[a-z]?)\s*,\s*(?=\d)/, '$1/')
+    .replace(/[^a-z0-9/\- ]/g, ' ')
+    .split(/\s+/).filter(Boolean).map(w => STREET_TYPES[w] || w).join(' ');
+  return a + '|' + String(suburb || '').toLowerCase().trim();
+}
+const isDomain_ = url => /domain\.com\.au/.test(String(url || ''));
 
 /* ---------------- geocoding ---------------- */
 function geocodeMissing() {
