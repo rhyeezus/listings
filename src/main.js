@@ -31,6 +31,7 @@ const state = {
   pic: {}, // listing id -> the photo its card is showing
   mapFilter: 'in', // which listings the map shows (MAP_FILTERS)
   mapDay: '', // '' or a day ("Wednesday 28 Oct") to show only that day's inspections
+  mapFocus: '', // a listing to close in on when the map next draws ("See on the map")
 }
 
 const app = document.getElementById('app')
@@ -323,7 +324,7 @@ function viewCard(l, opening, from) {
         ${rentLine(l)}
         <div><div class="addr" id="sheet-title">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
         <div class="chips">${chips(l)}</div>
-        ${detailsBody(l, inspBlock(l) + about(l, false))}
+        ${detailsBody(l, inspBlock(l) + about(l, false) + locMap(l))}
       </div></div>
       <div class="sheet-foot">
         <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-cv="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
@@ -399,7 +400,7 @@ function viewSheet(rows, key, opening) {
         ${rentLine(l)}
         <div><div class="addr" id="sheet-title">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
         <div class="chips">${chips(l)}</div>
-        ${detailsBody(l, when + about(l))}
+        ${detailsBody(l, when + about(l) + locMap(l))}
       </div></div>
       <div class="sheet-foot">
         <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-sv="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
@@ -484,18 +485,24 @@ function viewMap() {
       <span class="sub">${placed} on the map${items.length > placed ? ` · ${items.length - placed} without a location yet` : ''}</span>
     </div>`
 }
+// Leaflet loads once, the first time any map is shown (the Map tab or a listing's Location map).
+let leafletReady = null
+const loadLeaflet = () => leafletReady ||= Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')]).then(([m]) => m.default)
+// OpenStreetMap's own tiles (no key needed; darkened with a filter in dark mode, in the CSS).
+const osmTiles = L => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+})
+// A listing's pin: its label (price or time) coloured by where the votes stand.
+const pinIcon = (L, l, label) => L.divIcon({ className: '', html: `<span class="pin ${combined(l)}">${esc(label)}</span>`, iconSize: null, popupAnchor: [0, -30] })
 // The map ({ L, el, map, far, pins, fitFor }) is made once, by the first render that needs it (later renders
 // share the same promise, even while it loads), and moved into each render's #map-slot.
 let mapReady = null
 const ensureMap = () => mapReady ||= makeMap()
 async function makeMap() {
-  const [{ default: L }] = await Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')])
+  const L = await loadLeaflet()
   const el = document.createElement('div'); el.className = 'map-canvas'
   const map = L.map(el, { zoomSnap: 0.5 }).setView([-37.87, 144.99], 13)
-  // OpenStreetMap's own tiles (no key needed; darkened with a filter in dark mode, in the CSS).
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map)
+  osmTiles(L).addTo(map)
   // Zoomed out, the pins are dots (100-odd price labels would pile up); zoomed in to street level, or with a day
   // picked (only that day's few), they show their labels.
   const far = () => el.classList.toggle('far', map.getZoom() < 15 && !state.mapDay)
@@ -508,23 +515,52 @@ function placeMap() {
     slot.appendChild(ui.el)
     ui.map.invalidateSize()
     drawPins(ui)
-  }).catch(() => { mapReady = null; toast('The map didn’t load. Check your connection.') })
+  }).catch(() => { mapReady = leafletReady = null; toast('The map didn’t load. Check your connection.') })
 }
 function drawPins(ui) {
   const { L, map, pins } = ui
   pins.clearLayers()
-  const items = mapItems().filter(x => x.l.geo)
+  const items = mapItems().filter(x => x.l.geo), markers = {}
   items.forEach(({ l, insp }) => {
-    const c = combined(l)
-    L.marker(l.geo, {
-      icon: L.divIcon({ className: '', html: `<span class="pin ${c}">${esc(insp ? clockOf(insp.start) : money(l.price))}</span>`, iconSize: null, popupAnchor: [0, -30] }),
-      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: { both: 300, split: 200, none: 100 }[c] || 0,
+    markers[l.id] = L.marker(l.geo, {
+      icon: pinIcon(L, l, insp ? clockOf(insp.start) : money(l.price)),
+      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: { both: 300, split: 200, none: 100 }[combined(l)] || 0,
     }).bindPopup(() => pinCard(l, insp), { minWidth: 220, maxWidth: 240 }).addTo(pins)
   })
   // Fit the pins when the filter or day changes, not on every re-render (so a vote doesn't move the map).
   const key = state.mapFilter + '|' + state.mapDay
   if (ui.fitFor !== key && items.length) { map.fitBounds(L.latLngBounds(items.map(x => x.l.geo)), { padding: [40, 40], maxZoom: 15 }); ui.fitFor = key }
+  // Arrived from a listing's "See on the map": close in on it, with its mini card open.
+  const focus = state.mapFocus && markers[state.mapFocus]
+  if (focus) { map.setView(focus.getLatLng(), 16); focus.openPopup() }
+  state.mapFocus = ''
   ui.far()
+}
+// A listing's Location section (the inspection sheet and the opened card): a small map centred on it, which
+// doesn't pan with a finger (so it can't trap the scroll) but has + and −, and a way into the full map.
+function locMap(l) {
+  if (!l.geo) return ''
+  return `<div class="loc"><div class="lbl">Location</div>
+    <div class="loc-map" data-id="${esc(l.id)}" role="img" aria-label="Map of ${esc(l.address)}, ${esc(l.suburb)}"></div>
+    <button class="ghost loc-go" type="button" data-map="${esc(l.id)}">See on the map</button>
+  </div>`
+}
+let miniMap = null // the open listing's Location map; removed before each render replaces it
+function placeMiniMap() {
+  const el = $('.loc-map'), l = el && state.listings.find(x => x.id === el.dataset.id)
+  if (!l?.geo) return
+  loadLeaflet().then(L => {
+    if (!el.isConnected) return // re-rendered while Leaflet loaded
+    miniMap = L.map(el, { dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }).setView(l.geo, 15)
+    osmTiles(L).addTo(miniMap)
+    L.marker(l.geo, { icon: pinIcon(L, l, money(l.price)), interactive: false, keyboard: false }).addTo(miniMap)
+  }).catch(() => { leafletReady = null })
+}
+// "See on the map": the Map tab, closed in on this listing (showing everything if the filters would hide it).
+function showOnMap(id) {
+  state.mapFocus = id
+  if (!mapItems().some(x => x.l.id === id)) { state.mapFilter = 'all'; state.mapDay = '' }
+  location.hash = '#map'
 }
 // The pin's mini card: photo, rent, address, inspection and votes, with Open for the whole card.
 function pinCard(l, insp) {
@@ -590,6 +626,7 @@ function render() {
   state.sheet = null; state.card = null
   const sheet = sheetKey ? viewSheet(rows, sheetKey, !wasOpen) : cardFor ? viewCard(cardFor, !wasOpen, r) : ''
   const scrollY = window.scrollY
+  if (miniMap) { miniMap.remove(); miniMap = null } // its element is about to go
   app.innerHTML = `<header class="bar"><div class="bar-in">
       <div class="brand">Shortlist <small>${active().length} listings</small></div>
       <nav class="tabs" aria-label="Views">
@@ -609,6 +646,7 @@ function render() {
   if (r === 'all' || r === 'inspections') window.scrollTo(0, scrollY)
   wire()
   if (r === 'map') placeMap()
+  placeMiniMap()
   if (open && !wasOpen) $('#sheet').focus()
   else if (state.sheet && was?.row.key === state.sheet.row.key) $('.sheet-body').scrollTop = sheetTop
   if (!open && state.focusSel) $(state.focusSel)?.focus({ preventScroll: true })
@@ -647,6 +685,7 @@ function wire() {
   $('#big .pics')?.addEventListener('click', e => { if (!e.target.closest('button')) openCard() })
   document.querySelectorAll('[data-mf]').forEach(b => b.addEventListener('click', () => { state.mapFilter = b.dataset.mf; render() }))
   $('#map-day')?.addEventListener('change', e => { state.mapDay = e.target.value; render() })
+  document.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => showOnMap(b.dataset.map)))
   wirePics()
 }
 // Every carousel on the page: back to the listing's remembered photo, then keep the counter, dots and
