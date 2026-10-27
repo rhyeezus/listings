@@ -89,6 +89,7 @@ const active = () => state.listings.filter(l => l.status !== 'gone')
 
 /* ---------- api ---------- */
 async function load() {
+  if (!API) return render() // no back end in this build: never send the passcode anywhere
   state.loading = true
   try {
     const r = await fetch(`${API}?key=${encodeURIComponent(state.key)}`)
@@ -418,14 +419,14 @@ function gate() {
     <div><h1>Shortlist</h1><p class="sub">The rentals we’re looking at, together.</p></div>
     ${API ? '' : '<div class="banner">This build has no back-end address. Set VITE_API_URL in Vercel and redeploy.</div>'}
     <label for="key">Passcode</label>
-    <input id="key" type="password" autocomplete="current-password" required ${err ? 'aria-invalid="true" aria-describedby="key-err"' : ''}>
+    <input id="key" type="password" autocomplete="current-password" required ${API ? '' : 'disabled'} ${err ? 'aria-invalid="true" aria-describedby="key-err"' : ''}>
     ${err ? `<p class="err" id="key-err" role="alert">${esc(err)}</p>` : ''}
-    <button class="primary" type="submit">Open shortlist</button>
+    <button class="primary" type="submit" ${API ? '' : 'disabled'}>Open shortlist</button>
   </form></main>`
   $('#gate').addEventListener('submit', e => {
     e.preventDefault()
     const k = $('#key').value.trim()
-    if (!k) return
+    if (!k || !API) return
     state.key = k; store.set('rs-key', k); state.gateError = ''
     const b = $('#gate .primary'); b.disabled = true; b.textContent = 'Opening…'
     load()
@@ -441,7 +442,7 @@ function pickWho() {
 }
 function route() { return (location.hash || '#swipe').slice(1) }
 function render() {
-  if (!state.key) return gate()
+  if (!state.key || !API) return gate() // without a back end, stay on the sign-in page and its warning
   if (!state.who) return pickWho()
   const [r, ...sel] = route().split('/')
   if (r !== 'inspections') state.keep.clear()
