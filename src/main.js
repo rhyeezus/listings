@@ -229,6 +229,8 @@ async function rescan() {
   try {
     const j = await post({ action: 'rescan' })
     if (j.ok) { toast(`Rescan done: ${j.added} new, ${j.gone} gone.`); await load() }
+    // No Domain API keys (it's a paid plan), so rescans run in a browser on domain.com.au (scripts/domain-rescan.js).
+    else if (j.error === 'not_configured') toast('Rescans run from a browser on domain.com.au for now: ask Claude to rescan Domain. New listings also come in from the alert emails.', 10000)
     else toast(j.message || 'Rescan didn’t run.')
   } catch { toast('Rescan didn’t run. Check your connection.') }
   if (b) b.disabled = false
