@@ -19,6 +19,7 @@ const state = {
   sort: 'score',
   onlyBoth: false,
   history: [],
+  back: '', // direction of the last undone vote, so its card can fly back in
   fetchedAt: null,
 }
 
@@ -90,6 +91,7 @@ async function load() {
     }
     state.listings = j.listings.map(shape)
     state.fetchedAt = new Date()
+    runImport()
   } catch (e) {
     toast('Couldn’t load listings. Check your connection and pull to refresh.')
   } finally {
@@ -106,7 +108,7 @@ async function vote(id, v) {
   if (!l) return
   const field = state.who + '_vote'
   const prev = l[field] || ''
-  state.history.push({ id, prev })
+  state.history.push({ id, prev, v })
   l[field] = v
   render()
   try {
@@ -129,6 +131,27 @@ function saveNote(id, text) {
     try { const j = await post({ action: 'vote', id, who: state.who, note: text }); if (!j.ok) throw 0 }
     catch { toast('Your note didn’t save. Try again.') }
   }, 800)
+}
+// A Domain scan handed over by scripts/domain-rescan.js as #import=<json>. It waits in sessionStorage
+// until the app is signed in, then goes to the sheet with the stored passcode.
+function takeImport() {
+  if (!location.hash.startsWith('#import=')) return
+  try { sessionStorage.setItem('rs-import', decodeURIComponent(location.hash.slice(8))) } catch {}
+  history.replaceState(null, '', location.pathname + location.search + '#swipe')
+}
+async function runImport() {
+  if (!state.key) return
+  let raw = null
+  try { raw = sessionStorage.getItem('rs-import'); sessionStorage.removeItem('rs-import') } catch {}
+  if (!raw) return
+  const scan = JSON.parse(raw)
+  toast(`Importing ${scan.rows.length} listings from Domain…`, 0)
+  try {
+    const j = await post({ action: 'import', rows: scan.rows, full: scan.full })
+    if (!j.ok) throw new Error(j.message || j.error)
+    toast(`Rescan done: ${j.added} new, ${j.updated} updated, ${j.gone} marked gone${j.goneChecked ? '' : ' (gone check skipped: the scan looked partial)'}.`, 10000)
+    await load()
+  } catch (e) { toast('The import didn’t go through: ' + (e.message || e), 10000) }
 }
 async function rescan() {
   const b = $('#rescan'); if (b) b.disabled = true
@@ -188,19 +211,26 @@ function links(l) {
     <a href="https://www.google.com/maps/search/train+station+near+${q}" target="_blank" rel="noopener">Nearest trains ↗</a>
   </div>`
 }
-function cardBody(l) {
+function rentLine(l) {
+  return `<div class="rent"><span class="price">${money(l.price)}<small> /wk</small></span>${l.bond ? `<span class="bond">bond ${money(l.bond)}</span>` : ''}</div>`
+}
+// Inspection, notes, votes, agency and links: shared by grid cards and the swipe card's details panel.
+function detailsBody(l) {
   const other = l[otherKey() + '_note']
   const meta = [l.agency, l.available && `Available ${String(l.available).replace(/^Available /i, '').toLowerCase()}`].filter(Boolean)
-  return `${photo(l)}<div class="inner">
-    <div class="rent"><span class="price">${money(l.price)}<small> /wk</small></span>${l.bond ? `<span class="bond">bond ${money(l.bond)}</span>` : ''}</div>
-    <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
-    <div class="chips">${chips(l)}</div>
-    ${inspBlock(l)}
+  return `${inspBlock(l)}
     ${l.notes ? `<p class="note">${esc(l.notes)}</p>` : ''}
     ${other ? `<p class="note"><b>${VOTERS[otherKey()]}:</b> ${esc(other)}</p>` : ''}
     ${votesLine(l)}
     <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</div>
-    ${links(l)}
+    ${links(l)}`
+}
+function cardBody(l) {
+  return `${photo(l)}<div class="inner">
+    ${rentLine(l)}
+    <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
+    <div class="chips">${chips(l)}</div>
+    ${detailsBody(l)}
   </div>`
 }
 
@@ -209,28 +239,45 @@ function queue() {
   return active().filter(l => !myVote(l))
     .sort((a, b) => b.score - a.score || (nextInsp(a) ? 0 : 1) - (nextInsp(b) ? 0 : 1) || a.price - b.price)
 }
+const ICONS = {
+  no: '<path d="M6 6l12 12M18 6L6 18"/>',
+  maybe: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+  yes: '<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+}
+const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`
+
+// One card in the swipe stack. i = 0 is the top (interactive) card; the ones behind are decoration.
+function swipeCard(l, i, back) {
+  const top = i === 0
+  const n = nextInsp(l)
+  return `<article class="swipe-card${top ? ' top' : ''}${top && back ? ' back-' + back : ''}" style="--i:${i}" ${top ? `id="big" data-id="${esc(l.id)}"` : 'aria-hidden="true"'}>
+    <div class="sc-photo"><span class="sc-ph">${esc(l.suburb)}</span>${l.photo_url ? `<img src="${esc(l.photo_url)}" alt="" draggable="false" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
+    ${l.isNew ? '<span class="badge">New</span>' : ''}
+    ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Maybe</span>' : ''}
+    <div class="sc-info">
+      ${rentLine(l)}
+      <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
+      <div class="sc-when">${n ? `Inspect ${esc(n.label)}` : 'No inspection listed'}</div>
+      ${top ? `<div class="chips">${chips(l)}</div><button class="sc-more" id="more" type="button" aria-expanded="false" aria-controls="details">Details</button>` : ''}
+    </div>
+    ${top ? `<div class="sc-details" id="details" hidden><button class="ghost sc-less" id="less" type="button">Hide details</button>${detailsBody(l)}</div>` : ''}
+  </article>`
+}
 function viewSwipe() {
   const q = queue()
+  const back = state.back; state.back = ''
   if (!q.length) return `<div class="card"><div class="inner"><h2>You’ve voted on everything.</h2><p class="sub">New listings from the next rescan will show up here. Check the inspection run for what you’re both keen on.</p><div><a href="#inspections">Go to inspections</a></div></div></div>`
-  const l = q[0]
+  // Four cards: the fourth sits invisible behind the third so the stack never pops when the top one flies off.
+  const cards = q.slice(0, 4).map((l, i) => swipeCard(l, i, back)).reverse().join('')
   return `<section class="deck">
-    <div>
-      <div class="stage">
-        <span class="stamp yes" id="sy">Yes</span><span class="stamp no" id="sn">No</span>
-        <article class="card big" id="big" data-id="${esc(l.id)}">${cardBody(l)}</article>
-      </div>
-      <div class="actions">
-        <button class="act no" data-act="no" type="button">No<kbd>←</kbd></button>
-        <button class="act maybe" data-act="maybe" type="button">Maybe<kbd>↓</kbd></button>
-        <button class="act yes" data-act="yes" type="button">Yes<kbd>→</kbd></button>
-      </div>
+    <div class="stack" id="stack">${cards}</div>
+    <div class="actions">
+      <button class="act small undo" id="undo" type="button" aria-label="Undo last vote (U)" title="Undo (U)" ${state.history.length ? '' : 'disabled'}>${icon('undo')}</button>
+      <button class="act no" data-act="no" type="button" aria-label="No (left arrow)" title="No (←)">${icon('no')}</button>
+      <button class="act small maybe" data-act="maybe" type="button" aria-label="Maybe (up arrow)" title="Maybe (↑)">${icon('maybe')}</button>
+      <button class="act yes" data-act="yes" type="button" aria-label="Yes (right arrow)" title="Yes (→)">${icon('yes')}</button>
     </div>
-    <aside class="side">
-      <div><b>${q.length} left to vote on.</b> Best matches come first: floorboards, ground floor, a courtyard, bayside.</div>
-      <div>Drag right for yes, left for no. On a keyboard: → yes, ↓ maybe, ← no, U undo.</div>
-      <div>${VOTERS[otherKey()]} votes separately. Anything you both say yes to lands at the top of Inspections.</div>
-      <div><button class="ghost" id="undo" type="button" ${state.history.length ? '' : 'disabled'}>Undo last vote</button></div>
-    </aside>
   </section>`
 }
 function viewInspections() {
@@ -334,7 +381,7 @@ function render() {
         <button class="ghost" id="rescan" type="button">Rescan</button>
       </div>
     </div></header>
-    <main>${view}</main>`
+    <main class="view-${r}">${view}</main>`
   if (r === 'all') window.scrollTo(0, scrollY)
   wire()
 }
@@ -342,8 +389,10 @@ function wire() {
   $('#switch')?.addEventListener('click', () => { state.who = state.who === 'rhys' ? 'partner' : 'rhys'; store.set('rs-who', state.who); state.history = []; render() })
   $('#rescan')?.addEventListener('click', rescan)
   $('#undo')?.addEventListener('click', undo)
-  document.querySelectorAll('.act').forEach(b => b.addEventListener('click', () => decideTop(b.dataset.act)))
+  document.querySelectorAll('.act[data-act]').forEach(b => b.addEventListener('click', () => decideTop(b.dataset.act)))
   const big = $('#big'); if (big) drag(big)
+  $('#more')?.addEventListener('click', () => showDetails(true))
+  $('#less')?.addEventListener('click', () => showDetails(false))
   document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.f; render() }))
   document.querySelectorAll('[data-both]').forEach(b => b.addEventListener('click', () => { state.onlyBoth = b.dataset.both === '1'; render() }))
   $('#sort')?.addEventListener('change', e => { state.sort = e.target.value; render() })
@@ -353,55 +402,95 @@ function wire() {
   }))
   document.querySelectorAll('[data-note]').forEach(t => t.addEventListener('input', () => saveNote(t.dataset.note, t.value)))
 }
+function showDetails(open) {
+  const d = $('#details'); if (!d) return
+  d.hidden = !open
+  $('#more').setAttribute('aria-expanded', String(open))
+  ;(open ? $('#less') : $('#more')).focus()
+}
+
+/* ---------- swipe physics ---------- */
+const clamp01 = n => Math.max(0, Math.min(1, n))
+const SWIPE_DIST = 120, FLICK_SPEED = 0.6, TAP_SLOP = 6 // px, px/ms, px
+// Stamps fade in with drag distance; --p on the stack (0..1) slides the cards behind up one slot.
+function showDrag(el, dx, dy) {
+  const up = -dy > Math.abs(dx)
+  el.querySelector('[data-stamp="yes"]').style.opacity = up ? 0 : clamp01(dx / 100)
+  el.querySelector('[data-stamp="no"]').style.opacity = up ? 0 : clamp01(-dx / 100)
+  el.querySelector('[data-stamp="maybe"]').style.opacity = up ? clamp01(-dy / 100) : 0
+  $('#stack').style.setProperty('--p', clamp01(Math.hypot(dx, dy) / 160))
+}
 function drag(el) {
-  let x0 = null, dx = 0
-  el.addEventListener('pointerdown', e => { if (e.target.closest('a')) return; x0 = e.clientX; dx = 0; el.setPointerCapture(e.pointerId); el.classList.add('dragging') })
-  el.addEventListener('pointermove', e => {
-    if (x0 == null) return
-    dx = e.clientX - x0
-    el.style.transform = `translateX(${dx}px) rotate(${dx / 30}deg)`
-    $('#sy').style.opacity = Math.max(0, Math.min(1, dx / 120)); $('#sn').style.opacity = Math.max(0, Math.min(1, -dx / 120))
+  let s = null
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('a, button, .sc-details')) return
+    s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0 }
+    el.setPointerCapture(e.pointerId); el.classList.add('dragging')
   })
-  const end = () => {
-    if (x0 == null) return
-    el.classList.remove('dragging'); x0 = null
-    if (dx > 110) return fling('yes'); if (dx < -110) return fling('no')
-    el.style.transform = ''; $('#sy').style.opacity = 0; $('#sn').style.opacity = 0
+  el.addEventListener('pointermove', e => {
+    if (!s) return
+    const dx = e.clientX - s.x, dy = e.clientY - s.y, dt = Math.max(1, e.timeStamp - s.t)
+    s.vx = 0.7 * (dx - s.dx) / dt + 0.3 * s.vx; s.vy = 0.7 * (dy - s.dy) / dt + 0.3 * s.vy
+    s.dx = dx; s.dy = dy; s.t = e.timeStamp
+    el.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 16}deg)`
+    showDrag(el, dx, dy)
+  })
+  const end = e => {
+    if (!s) return
+    const held = e.timeStamp - s.t > 100 // paused before letting go: not a flick
+    const { dx, dy } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
+    s = null
+    el.classList.remove('dragging')
+    if (Math.hypot(dx, dy) < TAP_SLOP) { el.style.transform = ''; showDrag(el, 0, 0); return showDetails(true) } // a tap, not a swipe
+    const flickX = Math.abs(vx) > FLICK_SPEED && Math.abs(dx) > 40
+    if (-dy > Math.abs(dx) && (dy < -SWIPE_DIST || (vy < -FLICK_SPEED && dy < -40))) return fling('maybe', dx, dy)
+    if (dx > SWIPE_DIST || (flickX && vx > 0)) return fling('yes', dx, dy)
+    if (dx < -SWIPE_DIST || (flickX && vx < 0)) return fling('no', dx, dy)
+    el.style.transform = ''; showDrag(el, 0, 0) // spring back
   }
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end)
 }
-function fling(v) {
-  const el = $('#big'); if (!el) return
+function fling(v, dx = 0, dy = 0) {
+  const el = $('#big'); if (!el || el.dataset.flung) return
+  el.dataset.flung = '1'
   const id = el.dataset.id
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches || v === 'maybe') return vote(id, v)
-  el.style.transform = `translateX(${v === 'yes' ? 600 : -600}px) rotate(${v === 'yes' ? 18 : -18}deg)`; el.style.opacity = 0
-  setTimeout(() => vote(id, v), 180)
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return vote(id, v)
+  el.querySelector(`[data-stamp="${v}"]`).style.opacity = 1
+  $('#stack').style.setProperty('--p', 1)
+  const side = v === 'yes' ? 1 : -1
+  el.classList.add('flying')
+  el.style.transform = v === 'maybe'
+    ? `translate(${dx}px, ${-window.innerHeight - 200}px)`
+    : `translate(${side * (window.innerWidth + 300)}px, ${dy + 60}px) rotate(${side * 30}deg)`
+  setTimeout(() => vote(id, v), 280)
 }
 function decideTop(v) { if ($('#big')) fling(v) }
 function undo() {
   const h = state.history.pop(); if (!h) return
   const l = state.listings.find(x => x.id === h.id); if (!l) return
   const cur = l[state.who + '_vote']
+  state.back = h.v // the card flies back in from the side it left
   l[state.who + '_vote'] = h.prev; render()
   post({ action: 'vote', id: h.id, who: state.who, vote: h.prev }).then(j => { if (!j.ok) throw 0 })
     .catch(() => { l[state.who + '_vote'] = cur; toast('Undo didn’t save.'); render() })
 }
 let toastT
-function toast(msg) {
+function toast(msg, ms = 4000) { // ms = 0 keeps it up until the next toast
   let t = $('.toast'); if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t) }
-  t.textContent = msg; clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 4000)
+  t.textContent = msg; clearTimeout(toastT); if (ms) toastT = setTimeout(() => t.remove(), ms)
 }
 
 document.addEventListener('keydown', e => {
   if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || route() !== 'swipe') return
   if (e.key === 'ArrowRight') { e.preventDefault(); decideTop('yes') }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); decideTop('no') }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); decideTop('maybe') }
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); decideTop('maybe') }
   else if (e.key.toLowerCase() === 'u') undo()
 })
 window.addEventListener('hashchange', render)
 // Pick up the other person's votes when the app comes back into view.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.key && state.fetchedAt && Date.now() - state.fetchedAt > 60000) load() })
 
+takeImport()
 render()
 if (state.key && state.who) load()

@@ -32,13 +32,23 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Rescans
 
-The sheet is the source of truth. A rescan adds new listings, refreshes price, inspections and photos on existing ones, and never touches votes or notes.
+The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability and agency on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
 
-**For now (manual):** ask Claude or Cowork to run the saved search on the `Search` tab and paste the results into the `Inbox` tab using its column headers. Then run **Rental → Merge inbox**:
+**Domain, from a browser (the normal way):** Domain blocks requests from servers, so the scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
+1. Open the app (local or deployed) and sign in, so it has the passcode.
+2. In another tab, open any www.domain.com.au page, paste `scripts/domain-rescan.js` into the console, and run `await domainRescan()` (about 1.5 seconds per listing; progress is in `window.__rescan`). Keep `DOMAIN_SEARCH` at the top of the script in step with the `Search` tab.
+3. Run `domainRescanHandoff('<app url>')`. That tab opens the app, which imports the scan and shows a summary.
+
+The import merges like a full scan:
+- new listings are added, with flooring, floor level and outdoor space read from the ad text and features
+- Domain listings that no longer show up are marked `gone`; realestate.com.au and other listings never are
+- if any listing page failed to load, or the scan returned under 60% of the active Domain listings, nothing is marked gone
+
+**Domain API (needs a paid key):** `Code.gs` can also search through Domain's official API, which would make the app's **Rescan** button, **Rental → Rescan Domain now** and **Rental → Turn on daily rescan** work on their own. Domain's Agents & Listings package is "contact for price" with a business profile, so this is dormant: it only runs if `DOMAIN_API_KEY` (or `DOMAIN_CLIENT_ID` + `DOMAIN_CLIENT_SECRET`) is set in Script properties.
+
+**Manual (any site):** ask Claude or Cowork to run the saved search on the `Search` tab and paste the results into the `Inbox` tab using its column headers. Then run **Rental → Merge inbox**:
 - *keep missing listings* for a partial scan (one suburb, one page)
 - *full scan: mark missing as gone* when the scan covered the whole search
-
-**Later (automatic):** if Domain API access comes through, fill in `fetchScanResults_()` in `Code.gs` so it returns listings in the Listings column format. The app's **Rescan** button and a daily time trigger on `dailyRescan` then work with no other changes.
 
 ## Columns
 
