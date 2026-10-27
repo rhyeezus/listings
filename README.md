@@ -50,7 +50,7 @@ The import merges like a full scan:
 - A listing new to the sheet gets one more call for its full ad text, availability and bond (at most 40 a run, to spare the daily allowance).
 - Listings already in the sheet keep their photos and description, so the browser scan's phone-sized photos aren't replaced. Photos from the API are Domain's full-size originals.
 
-Domain doesn't publish a free plan for listing search, so check what your project gets before relying on it. To set it up:
+This needs paid access: on developer.domain.com.au, **Agents & Listings** (the listing search) is "Contact for Price", and the account needs a business profile first (checked October 2026). It stays switched off until credentials are set. If you ever get access:
 1. Sign up at [developer.domain.com.au](https://developer.domain.com.au) (**Get started**: GitHub, Google or email).
 2. **Projects → Create Project**. Under **API Access**, check that **Agents & Listings** is on the project, and note its plan and daily allowance. If adding it asks for payment or a sales contact, stop: keep using the browser rescan.
 3. **Credentials → Create OAuth Client**, choose **Client Credentials**, then add a client secret.
@@ -58,13 +58,18 @@ Domain doesn't publish a free plan for listing search, so check what your projec
 5. Reload the sheet and run **Rental → Check Domain API access**. It runs the saved search once without changing the sheet, and shows how many listings came back and the plan's allowance. If Domain refuses, the plan doesn't include listing search.
 6. Run **Rental → Rescan Domain now**, check the sheet, then **Rental → Turn on automatic rescans**. If a run fails, Google emails you.
 
-**realestate.com.au, from its alert emails:** realestate.com.au has no API, but its saved-search alerts email you each new listing. `Code.gs` reads those emails from the Gmail of the account that owns the sheet and adds the listings that aren't already there (matched on address, so a listing that's also on Domain isn't added twice). It only reads mail; nothing is labelled, moved or deleted. To set it up:
-1. On realestate.com.au, sign in with the **same Google account that owns the sheet** (the alerts have to land in that Gmail).
-2. Search **Rent** with the suburbs, bedrooms and maximum rent from the `Search` tab, save the search, and turn on its email alerts (as soon as listings are added, or daily).
-3. When the first alert has arrived, run **Rental → Preview realestate.com.au alerts** in the sheet. Google asks you to allow Gmail access the first time. Check the list looks right (if it says no listings were found, the email layout needs a tweak).
-4. Run **Rental → Import realestate.com.au alerts now**, then **Rental → Turn on hourly alert import**.
+**New listings from alert emails (Domain and realestate.com.au):** both sites email you new listings from a saved search, for free. `Code.gs` reads those emails from the Gmail of the account that owns the sheet and adds the listings that aren't already there. It only reads mail; nothing is labelled, moved or deleted.
+- **Domain:** the alert's link gives the listing's id, the same one rescans use, so the next browser rescan fills in its photos, inspections and description. Domain listings already in the sheet are left alone, and one that's only here from realestate.com.au is taken over, keeping your votes and notes.
+- **realestate.com.au:** matched on address, so a listing that's also on Domain isn't added twice.
+- An email with no listings found (a newsletter, or an alert layout the import doesn't understand yet) is tried again for 3 days, then skipped.
 
-Listings from alerts have one photo and no inspection times or description, and aren't marked gone automatically (the emails don't say when a place is leased). If Domain lists the same place later, the next Domain rescan takes over the row, filling in its details and keeping your votes and notes.
+To set it up, for each site:
+1. Sign in to domain.com.au or realestate.com.au with the **same Google account that owns the sheet** (the alerts have to land in that Gmail).
+2. Search **Rent** with the suburbs, bedrooms and maximum rent from the `Search` tab (on Domain, also tick the filter that excludes deposit taken). Save the search with email alerts on, as often as it allows (as soon as listings are added, or daily). On Domain that's **Save search** (the bell) on the results; check **Account → Preferences → Email preferences** has property alerts on.
+3. When the first alert has arrived, run **Rental → Preview Domain alerts** (or **Preview realestate.com.au alerts**). Google asks you to allow Gmail access the first time. Check the list looks right; if it says no listings were found, the email layout needs a tweak.
+4. Run **Rental → Import alerts now**, then **Rental → Turn on hourly alert import** (one import covers both sites).
+
+Listings from alerts have one photo and no inspection times or description until a rescan finds them. realestate.com.au listings aren't marked gone automatically (the emails don't say when a place is leased); Domain ones are, by the next full Domain rescan that doesn't find them. If Domain lists a realestate.com.au place later, the Domain alert or rescan takes over the row, filling in its details and keeping your votes and notes.
 
 **Manual (any site):** ask Claude or Cowork to run the saved search on the `Search` tab and paste the results into the `Inbox` tab using its column headers. Then run **Rental → Merge inbox**:
 - *keep missing listings* for a partial scan (one suburb, one page)
