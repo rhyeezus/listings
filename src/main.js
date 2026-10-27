@@ -23,8 +23,10 @@ const state = {
   fetchedAt: null,
   keep: new Set(), // listings opened on the inspections view: they stay in its list, whatever the vote, until you leave it
   sheet: null, // the open inspection ad sheet: { row, prev, next }
-  sheetPushed: false, // the sheet was opened from the list, so closing it can go back in history
-  focusKey: '', // the row to put focus back on once the sheet closes
+  card: null, // the opened swipe card: { l }
+  overlayPushed: false, // the sheet or card was opened from its page, so closing it can go back in history
+  focusSel: '', // what to put focus back on once the sheet or card closes
+  pendingVote: '', // a vote made on the opened card, sent off once the deck is back
   gateError: '', // shown on the passcode page after a passcode is turned down
   pic: {}, // listing id -> the photo its card is showing
 }
@@ -282,9 +284,8 @@ const ICONS = {
 }
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`
 
-// One card in the swipe stack: a compact version of the inspection sheet (photos, rent, address, features, next
-// inspection, the start of the description). Details opens the rest. i = 0 is the top (interactive) card; the
-// ones behind are decoration.
+// One card in the swipe stack: photos, rent, address, features and the next inspection. Tapping it (or Details)
+// opens the whole card (viewCard). i = 0 is the top (interactive) card; the ones behind are decoration.
 function swipeCard(l, i, back) {
   const top = i === 0
   const n = nextInsp(l)
@@ -292,14 +293,30 @@ function swipeCard(l, i, back) {
     ${pics(l, { eager: i < 2, controls: top })}
     ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Maybe</span>' : ''}
     <div class="sc-info">
-      <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button" aria-expanded="false" aria-controls="details">Details</button>' : ''}</div>
+      <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button">Details</button>' : ''}</div>
       <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
       <div class="chips">${chips(l)}</div>
       <div class="sc-when${n ? '' : ' none'}">${n ? `<span class="lbl">Inspect</span> ${esc(n.label)}` : 'No inspection listed'}</div>
-      ${l.description ? `<p class="sc-desc">${esc(l.description)}</p>` : ''}
     </div>
-    ${top ? `<div class="sc-details" id="details" hidden><button class="ghost sc-less" id="less" type="button">Hide details</button>${detailsBody(l, inspBlock(l) + about(l, false))}</div>` : ''}
   </article>`
+}
+// The top swipe card opened up, in the inspection sheet's layout: every photo and detail, with the vote buttons.
+// Closing it (×, the backdrop, Escape, back) returns to the deck; voting closes it and sends the card off.
+function viewCard(l, opening) {
+  state.card = { l }
+  return `<div class="sheet-back" id="sheet-back"></div>
+    <section class="sheet full${opening ? ' opening' : ''}" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
+      <button class="sheet-x" id="sheet-x" type="button" aria-label="Close">${icon('no')}</button>
+      <div class="sheet-body">${pics(l, { eager: true })}<div class="inner">
+        ${rentLine(l)}
+        <div><div class="addr" id="sheet-title">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
+        <div class="chips">${chips(l)}</div>
+        ${detailsBody(l, inspBlock(l) + about(l, false))}
+      </div></div>
+      <div class="sheet-foot">
+        <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k}" data-cv="${k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+      </div>
+    </section>`
 }
 function viewSwipe() {
   const q = queue()
@@ -452,14 +469,15 @@ function render() {
   if (r !== 'inspections') state.keep.clear()
   const sheetKey = r === 'inspections' && sel.length === 2 ? sel.join('/') : ''
   if (sheetKey) state.keep.add(decodeURIComponent(sel[0]))
+  const cardOpen = r === 'swipe' && sel[0] === 'open'
   const left = queue().length
   const both = active().filter(l => combined(l) === 'both').length
   const rows = r === 'inspections' ? inspRows() : []
   const view = state.loading && !state.listings.length ? '<p class="empty">Loading listings…</p>'
     : r === 'inspections' ? viewInspections(rows) : r === 'all' ? viewAll() : viewSwipe()
-  const was = state.sheet, sheetTop = $('.sheet-body')?.scrollTop || 0
-  state.sheet = null
-  const sheet = sheetKey ? viewSheet(rows, sheetKey, !was) : ''
+  const was = state.sheet, wasOpen = !!(state.sheet || state.card), sheetTop = $('.sheet-body')?.scrollTop || 0
+  state.sheet = null; state.card = null
+  const sheet = sheetKey ? viewSheet(rows, sheetKey, !wasOpen) : cardOpen && queue()[0] ? viewCard(queue()[0], !wasOpen) : ''
   const scrollY = window.scrollY
   app.innerHTML = `<header class="bar"><div class="bar-in">
       <div class="brand">Shortlist <small>${active().length} listings</small></div>
@@ -474,13 +492,16 @@ function render() {
       </div>
     </div></header>
     <main class="view-${r}">${view}</main>${sheet}`
-  document.documentElement.classList.toggle('lock', !!state.sheet) // the list behind the sheet stays put
+  const open = !!(state.sheet || state.card)
+  document.documentElement.classList.toggle('lock', open) // the page behind the sheet or card stays put
   if (r === 'all' || r === 'inspections') window.scrollTo(0, scrollY)
   wire()
-  if (state.sheet && !was) $('#sheet').focus()
-  else if (state.sheet && was.row.key === state.sheet.row.key) $('.sheet-body').scrollTop = sheetTop
-  if (!state.sheet && state.focusKey) $(`.row[data-key="${CSS.escape(state.focusKey)}"]`)?.focus({ preventScroll: true })
-  if (!state.sheet) state.focusKey = ''
+  if (open && !wasOpen) $('#sheet').focus()
+  else if (state.sheet && was?.row.key === state.sheet.row.key) $('.sheet-body').scrollTop = sheetTop
+  if (!open && state.focusSel) $(state.focusSel)?.focus({ preventScroll: true })
+  if (!open) state.focusSel = ''
+  // A vote made on the opened card: now it's closed, send the top card off that way.
+  if (!open && r === 'swipe' && state.pendingVote) { const v = state.pendingVote; state.pendingVote = ''; requestAnimationFrame(() => decideTop(v)) }
 }
 function wire() {
   $('#switch')?.addEventListener('click', () => { state.who = state.who === 'rhys' ? 'partner' : 'rhys'; store.set('rs-who', state.who); state.history = []; render() })
@@ -488,8 +509,7 @@ function wire() {
   $('#undo')?.addEventListener('click', undo)
   document.querySelectorAll('.act[data-act]').forEach(b => b.addEventListener('click', () => decideTop(b.dataset.act)))
   const big = $('#big'); if (big) drag(big)
-  $('#more')?.addEventListener('click', () => showDetails(true))
-  $('#less')?.addEventListener('click', () => showDetails(false))
+  $('#more')?.addEventListener('click', openCard)
   document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.f; render() }))
   document.querySelectorAll('[data-both]').forEach(b => b.addEventListener('click', () => { state.onlyBoth = b.dataset.both === '1'; render() }))
   $('#sort')?.addEventListener('change', e => { state.sort = e.target.value; render() })
@@ -498,11 +518,12 @@ function wire() {
     vote(id, myVote(l) === b.dataset.v ? '' : b.dataset.v)
   }))
   document.querySelectorAll('[data-note]').forEach(t => t.addEventListener('input', () => saveNote(t.dataset.note, t.value)))
-  $('#sheet-x')?.addEventListener('click', closeSheet)
-  $('#sheet-back')?.addEventListener('click', closeSheet)
+  $('#sheet-x')?.addEventListener('click', closeOverlay)
+  $('#sheet-back')?.addEventListener('click', closeOverlay)
   $('#sheet-prev')?.addEventListener('click', () => goSheet(state.sheet?.prev))
   $('#sheet-next')?.addEventListener('click', () => goSheet(state.sheet?.next))
   document.querySelectorAll('[data-sv]').forEach(b => b.addEventListener('click', () => sheetVote(b.dataset.sv)))
+  document.querySelectorAll('[data-cv]').forEach(b => b.addEventListener('click', () => cardVote(b.dataset.cv)))
   document.querySelectorAll('.about-more').forEach(b => b.addEventListener('click', () => {
     const open = !b.previousElementSibling.classList.toggle('clamp')
     b.textContent = open ? 'Show less' : 'Read more'; b.setAttribute('aria-expanded', String(open))
@@ -525,24 +546,26 @@ function wirePics() {
       t.scrollBy({ left: +b.dataset.step * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })))
   })
 }
-function showDetails(open) {
-  const d = $('#details'); if (!d) return
-  d.hidden = !open
-  $('#more').setAttribute('aria-expanded', String(open))
-  ;(open ? $('#less') : $('#more')).focus()
-}
 
-/* ---------- inspection sheet ---------- */
-// A row opens the sheet by pushing #inspections/<key>, so the phone's back button closes it. Prev and next
-// replace that entry rather than adding more, so one back still returns to the list.
+/* ---------- inspection sheet and opened card ---------- */
+// A row opens the sheet by pushing #inspections/<key>, and a tap on the top swipe card opens it by pushing
+// #swipe/open, so the phone's back button closes either. Prev and next replace the sheet's entry rather than
+// adding more, so one back still returns to the list.
 let lastRoute = route()
 function replaceHash(h) { history.replaceState(null, '', h); lastRoute = route(); render() }
 function goSheet(row) { if (row) replaceHash('#inspections/' + row.key) }
-function closeSheet() {
-  if (!state.sheet) return
-  state.focusKey = state.sheet.row.key
-  if (state.sheetPushed) history.back()
-  else replaceHash('#inspections')
+function openCard() { if ($('#big')) location.hash = '#swipe/open' }
+function closeOverlay() {
+  if (state.sheet) state.focusSel = `.row[data-key="${CSS.escape(state.sheet.row.key)}"]`
+  else if (state.card) state.focusSel = '#more'
+  else return
+  if (state.overlayPushed) history.back()
+  else replaceHash('#' + route().split('/')[0])
+}
+function cardVote(v) {
+  if (!state.card) return
+  state.pendingVote = v // render() sends the card off once the deck is back
+  closeOverlay()
 }
 function sheetVote(v) {
   const s = state.sheet; if (!s) return
@@ -575,7 +598,7 @@ function drag(el) {
   let s = null
   el.addEventListener('pointerdown', e => {
     // The photo carousel scrolls on its own, so a drag that starts on it flicks photos; the card swipes from below it.
-    if (e.button !== 0 || e.target.closest('a, button, .sc-details, .pics-track')) return
+    if (e.button !== 0 || e.target.closest('a, button, .pics-track')) return
     s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0 }
     el.setPointerCapture(e.pointerId); el.classList.add('dragging')
   })
@@ -593,7 +616,7 @@ function drag(el) {
     const { dx, dy } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
     s = null
     el.classList.remove('dragging')
-    if (Math.hypot(dx, dy) < TAP_SLOP) { el.style.transform = ''; showDrag(el, 0, 0); return showDetails(true) } // a tap, not a swipe
+    if (Math.hypot(dx, dy) < TAP_SLOP) { el.style.transform = ''; showDrag(el, 0, 0); return openCard() } // a tap, not a swipe
     const flickX = Math.abs(vx) > FLICK_SPEED && Math.abs(dx) > 40
     if (-dy > Math.abs(dx) && (dy < -SWIPE_DIST || (vy < -FLICK_SPEED && dy < -40))) return fling('maybe', dx, dy)
     if (dx > SWIPE_DIST || (flickX && vx > 0)) return fling('yes', dx, dy)
@@ -634,8 +657,9 @@ function toast(msg, ms = 4000) { // ms = 0 keeps it up until the next toast
 
 document.addEventListener('keydown', e => {
   if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+  if (state.card) { if (e.key === 'Escape') { e.preventDefault(); closeOverlay() } return }
   if (state.sheet) {
-    if (e.key === 'Escape') { e.preventDefault(); closeSheet() }
+    if (e.key === 'Escape') { e.preventDefault(); closeOverlay() }
     else if (e.key === 'ArrowLeft' && state.sheet.prev) { e.preventDefault(); goSheet(state.sheet.prev) }
     else if (e.key === 'ArrowRight' && state.sheet.next) { e.preventDefault(); goSheet(state.sheet.next) }
     return
@@ -647,8 +671,8 @@ document.addEventListener('keydown', e => {
   else if (e.key.toLowerCase() === 'u') undo()
 })
 window.addEventListener('hashchange', () => {
-  const r = route()
-  state.sheetPushed = lastRoute === 'inspections' && r.startsWith('inspections/')
+  const r = route(), base = r.split('/')[0]
+  state.overlayPushed = lastRoute === base && r.startsWith(base + '/')
   lastRoute = r
   render()
 })
