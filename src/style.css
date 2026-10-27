@@ -286,6 +286,38 @@ html.viewing { overflow: hidden }
 .far .pin::after { display: none }
 .map .leaflet-container { font: inherit; background: var(--bay-soft) }
 @media (prefers-color-scheme: dark) { .map .leaflet-tile-pane, .loc-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6) } }
+/* the day planner: beside the map on wide screens (its own scroll), under it on phones */
+.map-split { display: grid; gap: 16px }
+@media (min-width: 900px) {
+  .map-split { grid-template-columns: minmax(0, 1fr) 360px }
+  .map-split .plan { height: calc(100svh - 250px); min-height: 360px; overflow-y: auto }
+}
+.plan { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 8px }
+.plan-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px }
+.plan-head h3 { margin: 0; font: 700 16px var(--f-display) }
+.plan-ics { padding: 9px 12px; font-size: 13px; white-space: nowrap }
+.plan-ics:disabled { opacity: .5; cursor: default }
+.plan-list { list-style: none; margin: 0; padding: 0 }
+.plan-row { display: grid; grid-template-columns: 20px 22px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); align-items: start }
+.plan-row:not(.on) .plan-body { opacity: .6 }
+.plan-pick { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--primary) }
+.plan-n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 800 12px var(--f-display); background: var(--primary); color: var(--primary-ink) }
+.plan-n:empty { background: none }
+.plan-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start }
+.plan-time { font: 500 13px var(--f-data) }
+.plan-addr { border: 0; background: none; padding: 0; color: var(--bay); font: 700 14px/1.3 var(--f-display); text-align: left; display: flex; align-items: center; gap: 6px }
+.plan-addr .dot, .legend i { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); border: 1.5px solid var(--muted) }
+.plan-addr .dot.both { background: var(--primary); border-color: var(--primary) }
+.plan-addr .dot.split { background: var(--maybe-soft); border-color: var(--maybe) }
+.plan-addr .dot.out { background: var(--no-soft); border-color: var(--no) }
+.plan-row .sub { font-size: 13px; margin: 0 }
+.flag { margin-top: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--muted) }
+.flag.bad { background: var(--no-soft); color: var(--no) }
+.flag.warn { background: var(--maybe-soft); color: var(--maybe) }
+.flag.ok { background: var(--yes-soft); color: var(--yes) }
+.plan-note { font-size: 12px; margin: 0 }
+.pin.skip { opacity: .4 }
+.map .plan-line { stroke: var(--primary); stroke-width: 3; stroke-dasharray: 6 6; stroke-linecap: round; fill: none }
 /* a listing's Location map (inspection sheet and opened card) */
 .loc { display: flex; flex-direction: column; gap: 8px }
 .loc .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600 }

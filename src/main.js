@@ -32,6 +32,7 @@ const state = {
   mapFilter: 'in', // which listings the map shows (MAP_FILTERS)
   mapDay: '', // '' or a day ("Wednesday 28 Oct") to show only that day's inspections
   mapFocus: '', // a listing to close in on when the map next draws ("See on the map")
+  picks: store.get('rs-picks', {}), // the day planner's ticks: "<id>/<inspection start ms>" -> going or not (this device)
 }
 
 const app = document.getElementById('app')
@@ -44,16 +45,16 @@ function parseInspections(text) {
   // "Wed 28 Oct, 4:45 - 5pm; Thu 29 Oct, 12:30 - 12:45pm"
   const now = new Date()
   return String(text || '').split(';').map(s => s.trim()).filter(Boolean).map(s => {
-    const m = s.match(/^\w{3} (\d{1,2}) (\w{3}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::\d{2})?\s*(am|pm)/i)
-    if (!m) return { label: s, start: null }
-    const [, d, mon, h, mi, ap1, h2, ap2] = m
-    let hour = +h
-    const ap = (ap1 || ap2).toLowerCase()
-    if (ap === 'pm' && hour !== 12) hour += 12
-    if (!ap1 && ap2.toLowerCase() === 'pm' && +h > +h2) hour -= 12 // "11:45 - 12:05pm"
+    const m = s.match(/^\w{3} (\d{1,2}) (\w{3}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i)
+    if (!m) return { label: s, start: null, end: null }
+    const [, d, mon, h, mi, ap1, h2, mi2, ap2] = m
+    const minutes = (hr, min, ap) => ((+hr % 12) + (ap.toLowerCase() === 'pm' ? 12 : 0)) * 60 + +(min || 0)
+    const endAt = minutes(h2, mi2, ap2)
+    let startAt = minutes(h, mi, ap1 || ap2) // no am/pm on the start: the end's
+    if (!ap1 && startAt > endAt) startAt -= 12 * 60 // "11:45 - 12:05pm" starts in the morning
     let year = now.getFullYear()
     if (MONTHS[mon] < now.getMonth() - 6) year++
-    return { label: s, start: new Date(year, MONTHS[mon], +d, hour, +(mi || 0)) }
+    return { label: s, start: new Date(year, MONTHS[mon], +d, 0, startAt), end: new Date(year, MONTHS[mon], +d, 0, endAt) }
   })
 }
 function score(l) {
@@ -468,6 +469,86 @@ function mapItems() {
   return active().filter(f).map(l => ({ l, insp: state.mapDay ? upcoming(l).find(i => dayOf(i.start) === state.mapDay) : null }))
     .filter(x => !state.mapDay || x.insp)
 }
+/* the day planner: the Map with a day picked */
+// That day's inspections in time order, each with whether you're going (ticked in state.picks; untouched, it's the
+// places you've both said yes to, or you have) and how it sits with the ones you're going to: overlapping one
+// (clash), or starting too soon after the last one to get there (tight).
+function planRows() {
+  const rows = mapItems().filter(x => x.insp?.end).sort((a, b) => a.insp.start - b.insp.start)
+    .map(x => ({ ...x, key: `${x.l.id}/${x.insp.start.getTime()}` }))
+  let n = 0
+  rows.forEach(r => {
+    r.on = r.key in state.picks ? state.picks[r.key] : combined(r.l) === 'both' || myVote(r.l) === 'yes'
+    if (r.on) r.n = ++n
+  })
+  rows.forEach((r, i) => {
+    r.clash = rows.find(o => o !== r && o.on && o.insp.start < r.insp.end && r.insp.start < o.insp.end)
+    const prev = rows.slice(0, i).reverse().find(o => o.on && o.insp.end <= r.insp.start)
+    if (prev && prev.l.geo && r.l.geo) {
+      r.from = prev; r.drive = driveMins(prev.l.geo, r.l.geo); r.gap = Math.round((r.insp.start - prev.insp.end) / 60000)
+      r.tight = r.gap < r.drive
+    }
+  })
+  return rows
+}
+// Minutes to drive between two places, roughly: the straight-line distance plus a third for the streets, at about
+// 25 km/h (inner Melbourne), plus a few minutes to park and walk in.
+function driveMins([lat1, lng1], [lat2, lng2]) {
+  const rad = x => x * Math.PI / 180, dLat = rad(lat2 - lat1), dLng = rad(lng2 - lng1)
+  const km = 12742 * Math.asin(Math.sqrt(Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2))
+  return Math.round(km * 1.35 / 25 * 60 + 3)
+}
+function planFlag(r) {
+  if (r.clash) return `<span class="flag bad">Clashes with ${esc(r.clash.l.address)}</span>`
+  if (r.tight) return `<span class="flag warn">Tight: about ${r.drive} min from ${esc(r.from.l.address)}, ${r.gap} min gap</span>`
+  if (r.from && r.on) return `<span class="flag ok">About ${r.drive} min from ${esc(r.from.l.address)}, ${r.gap - r.drive} min spare</span>`
+  if (!r.l.geo) return '<span class="flag">No map location yet</span>'
+  return ''
+}
+function viewPlan(rows) {
+  const going = rows.filter(r => r.on).length
+  return `<section class="plan" aria-labelledby="plan-title">
+    <div class="plan-head">
+      <div><h3 id="plan-title">${esc(state.mapDay)}</h3><p class="sub">${rows.length} inspection${rows.length === 1 ? '' : 's'} · going to ${going}</p></div>
+      <button class="primary plan-ics" id="plan-ics" type="button" ${going ? '' : 'disabled'}>Add ${going || ''} to calendar</button>
+    </div>
+    ${rows.length ? `<ol class="plan-list">${rows.map(r => `<li class="plan-row${r.on ? ' on' : ''}">
+      <input type="checkbox" class="plan-pick" data-pick="${esc(r.key)}" ${r.on ? 'checked' : ''} aria-label="Going to ${esc(r.l.address)} at ${clockOf(r.insp.start)}">
+      <span class="plan-n" aria-hidden="true">${r.on ? r.n : ''}</span>
+      <div class="plan-body">
+        <div class="plan-time">${clockOf(r.insp.start)} – ${clockOf(r.insp.end)}</div>
+        <button type="button" class="plan-addr" data-focus="${esc(r.l.id)}"><i class="dot ${combined(r.l)}"></i>${esc(r.l.address)}</button>
+        <div class="sub">${esc(r.l.suburb)} · ${money(r.l.price)}/wk</div>
+        ${planFlag(r)}
+      </div>
+    </li>`).join('')}</ol>` : '<p class="empty">No inspections that day with these filters.</p>'}
+    <p class="sub plan-note">Drive times are rough guesses from the distance between places.</p>
+  </section>`
+}
+// The ticked inspections as a calendar file (.ics): times in UTC, each with the address and the listing's link.
+function downloadIcs(rows) {
+  const stamp = d => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const text = s => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1')
+  const fold = line => line.length <= 73 ? line : line.match(/.{1,73}/g).join('\r\n ')
+  const events = rows.flatMap(({ l, insp }) => ['BEGIN:VEVENT', `UID:${l.id}-${insp.start.getTime()}@shortlist`, `DTSTAMP:${stamp(new Date())}`,
+    `DTSTART:${stamp(insp.start)}`, `DTEND:${stamp(insp.end)}`, `SUMMARY:${text(`Inspect ${l.address}, ${l.suburb}`)}`,
+    `LOCATION:${text(`${l.address}, ${l.suburb} VIC`)}`, `DESCRIPTION:${text(`${money(l.price)} per week${l.agency ? `, ${l.agency}` : ''}\n${l.listing_url}`)}`,
+    `URL:${l.listing_url}`, 'END:VEVENT'])
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Shortlist//Inspections//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', ...events, 'END:VCALENDAR'].map(fold).join('\r\n') + '\r\n'
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar;charset=utf-8' }))
+  a.download = `inspections-${state.mapDay.toLowerCase().replace(/\W+/g, '-')}.ics`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+}
+// A row's address: show its pin on the map, with the mini card open.
+function focusPin(id) {
+  ensureMap().then(ui => {
+    const m = ui.markers?.[id]; if (!m) return
+    ui.map.panTo(m.getLatLng()); m.openPopup()
+    $('#map-slot')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+}
 function viewMap() {
   const days = mapDays()
   if (state.mapDay && !days.some(([d]) => d === state.mapDay)) state.mapDay = '' // that day has passed
@@ -479,7 +560,7 @@ function viewMap() {
         <select id="map-day"><option value="">Any day</option>${days.map(([d, n]) => `<option value="${esc(d)}" ${state.mapDay === d ? 'selected' : ''}>${esc(d)} (${n})</option>`).join('')}</select>
       </label>
     </div>
-    <div class="map" id="map-slot"></div>
+    ${state.mapDay ? `<div class="map-split"><div class="map" id="map-slot"></div>${viewPlan(planRows())}</div>` : '<div class="map" id="map-slot"></div>'}
     <div class="map-foot">
       <div class="legend">${key.map(([c, n]) => `<span><i class="${c}"></i>${n}</span>`).join('')}</div>
       <span class="sub">${placed} on the map${items.length > placed ? ` · ${items.length - placed} without a location yet` : ''}</span>
@@ -493,7 +574,7 @@ const osmTiles = L => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.pn
   maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 })
 // A listing's pin: its label (price or time) coloured by where the votes stand.
-const pinIcon = (L, l, label) => L.divIcon({ className: '', html: `<span class="pin ${combined(l)}">${esc(label)}</span>`, iconSize: null, popupAnchor: [0, -30] })
+const pinIcon = (L, l, label, extra = '') => L.divIcon({ className: '', html: `<span class="pin ${combined(l)} ${extra}">${esc(label)}</span>`, iconSize: null, popupAnchor: [0, -30] })
 // The map ({ L, el, map, far, pins, fitFor }) is made once, by the first render that needs it (later renders
 // share the same promise, even while it loads), and moved into each render's #map-slot.
 let mapReady = null
@@ -521,12 +602,19 @@ function drawPins(ui) {
   const { L, map, pins } = ui
   pins.clearLayers()
   const items = mapItems().filter(x => x.l.geo), markers = {}
+  // With a day picked, the ones you're going to are numbered in order and joined up; the rest fade back.
+  const plan = state.mapDay ? planRows() : [], planned = {}
+  plan.forEach(r => { if (!planned[r.l.id] || r.on) planned[r.l.id] = r })
   items.forEach(({ l, insp }) => {
+    const r = planned[l.id], label = insp ? clockOf(insp.start) : money(l.price)
     markers[l.id] = L.marker(l.geo, {
-      icon: pinIcon(L, l, insp ? clockOf(insp.start) : money(l.price)),
-      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: { both: 300, split: 200, none: 100 }[combined(l)] || 0,
+      icon: pinIcon(L, l, r?.on ? `${r.n} · ${label}` : label, r && !r.on ? 'skip' : ''),
+      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: (r?.on ? 400 : 0) + ({ both: 300, split: 200, none: 100 }[combined(l)] || 0),
     }).bindPopup(() => pinCard(l, insp), { minWidth: 220, maxWidth: 240 }).addTo(pins)
   })
+  const route = plan.filter(r => r.on && r.l.geo).map(r => r.l.geo)
+  if (route.length > 1) L.polyline(route, { className: 'plan-line', interactive: false }).addTo(pins)
+  ui.markers = markers
   // Fit the pins when the filter or day changes, not on every re-render (so a vote doesn't move the map).
   const key = state.mapFilter + '|' + state.mapDay
   if (ui.fitFor !== key && items.length) { map.fitBounds(L.latLngBounds(items.map(x => x.l.geo)), { padding: [40, 40], maxZoom: 15 }); ui.fitFor = key }
@@ -686,6 +774,9 @@ function wire() {
   document.querySelectorAll('[data-mf]').forEach(b => b.addEventListener('click', () => { state.mapFilter = b.dataset.mf; render() }))
   $('#map-day')?.addEventListener('change', e => { state.mapDay = e.target.value; render() })
   document.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => showOnMap(b.dataset.map)))
+  document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('change', () => { state.picks[b.dataset.pick] = b.checked; store.set('rs-picks', state.picks); render() }))
+  document.querySelectorAll('[data-focus]').forEach(b => b.addEventListener('click', () => focusPin(b.dataset.focus)))
+  $('#plan-ics')?.addEventListener('click', () => downloadIcs(planRows().filter(r => r.on)))
   wirePics()
 }
 // Every carousel on the page: back to the listing's remembered photo, then keep the counter, dots and

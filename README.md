@@ -1,6 +1,6 @@
 # Shortlist
 
-A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day, a map, and a filterable grid. Tap any card for the whole listing (with a map of where it is) and any photo for the full-screen viewer.
+A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day, a map (pick a day to plan an inspection run: clashes and tight gaps flagged, and an Add to calendar), and a filterable grid. Tap any card for the whole listing (with a map of where it is) and any photo for the full-screen viewer.
 
 ```
 Google Sheet (Listings / Inbox / Search)
