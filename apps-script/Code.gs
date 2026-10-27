@@ -7,6 +7,7 @@
  *   Inbox     paste fresh scan results here (same columns as Listings, votes left blank),
  *             then run  Rental > Merge inbox.
  *   Search    the saved search criteria, used by automatic rescans and by whoever rescans by hand.
+ *   Plan      the app's day planner ticks, shared by both of you (the app makes it on the first tick).
  *
  * Script properties (Project Settings > Script properties):
  *   PASSCODE              the shared code you and your partner type into the app once.
@@ -21,6 +22,7 @@
 
 const LISTINGS = 'Listings';
 const INBOX = 'Inbox';
+const PLAN = 'Plan'; // the day planner's shared ticks (made on first use)
 const VOTERS = ['rhys', 'partner'];
 const VOTES = ['yes', 'maybe', 'no', ''];
 
@@ -77,7 +79,7 @@ function disableDailyRescan() {
 function doGet(e) {
   if (!authorised_(e.parameter.key)) return json_({ ok: false, error: 'bad_passcode' });
   const rows = readListings_().rows;
-  return json_({ ok: true, listings: rows, fetchedAt: new Date().toISOString() });
+  return json_({ ok: true, listings: rows, plan: readPlan_(), fetchedAt: new Date().toISOString() });
 }
 
 function doPost(e) {
@@ -88,6 +90,7 @@ function doPost(e) {
   if (body.action === 'vote') return json_(writeVote_(body));
   if (body.action === 'rescan') return json_(rescan_());
   if (body.action === 'import') return json_(importScan_(body));
+  if (body.action === 'pick') return json_(writePick_(body));
   return json_({ ok: false, error: 'unknown_action' });
 }
 
@@ -122,6 +125,36 @@ function authorised_(key) {
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ---------------- shared inspection plan ---------------- */
+// The day planner's ticks, the same for both of you: a row on the Plan tab for each inspection either of you has
+// ticked or unticked. key is "<listing id>|<inspection as written>", e.g. "8-14-macquarie-...|Wed 28 Oct, 9:45am - 10am".
+function readPlan_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(PLAN);
+  if (!sheet) return {};
+  const plan = {};
+  sheet.getDataRange().getValues().slice(1).forEach(r => { if (r[0]) plan[String(r[0])] = r[1] === true || String(r[1]).toUpperCase() === 'TRUE'; });
+  return plan;
+}
+// b.inspection is the tick's key (b.key is the passcode).
+function writePick_(b) {
+  if (VOTERS.indexOf(b.who) < 0) return { ok: false, error: 'bad_voter' };
+  const key = String(b.inspection || '');
+  if (!key || key.length > 300 || typeof b.going !== 'boolean') return { ok: false, error: 'bad_pick' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActive();
+    let sheet = ss.getSheetByName(PLAN);
+    if (!sheet) { sheet = ss.insertSheet(PLAN); sheet.getRange(1, 1, 1, 4).setValues([['key', 'going', 'by', 'updated']]); }
+    const at = sheet.getDataRange().getValues().map(r => String(r[0])).indexOf(key);
+    const row = [key, b.going, b.who, new Date().toISOString()];
+    if (at > 0) sheet.getRange(at + 1, 1, 1, 4).setValues([row]); else sheet.appendRow(row);
+    return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ---------------- votes ---------------- */

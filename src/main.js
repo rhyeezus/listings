@@ -32,7 +32,8 @@ const state = {
   mapFilter: 'in', // which listings the map shows (MAP_FILTERS)
   mapDay: '', // '' or a day ("Wednesday 28 Oct") to show only that day's inspections
   mapFocus: '', // a listing to close in on when the map next draws ("See on the map")
-  picks: store.get('rs-picks', {}), // the day planner's ticks: "<id>/<inspection start ms>" -> going or not (this device)
+  picks: {}, // the day planner's ticks: "<id>|<inspection as written>" -> going or not, shared through the sheet's Plan tab
+  sharedPlan: false, // the back end keeps the ticks (older back ends don't: then they stay on this device)
 }
 
 const app = document.getElementById('app')
@@ -114,6 +115,8 @@ async function load() {
       throw new Error(j.error)
     }
     state.listings = j.listings.map(shape)
+    state.sharedPlan = !!j.plan
+    state.picks = j.plan || store.get('rs-picks', {})
     state.fetchedAt = new Date()
     runImport()
   } catch (e) {
@@ -142,6 +145,22 @@ async function vote(id, v) {
     l[field] = prev
     state.history.pop()
     toast('That vote didn’t save. Try again.')
+    render()
+  }
+}
+// A day planner tick: shown straight away, saved to the sheet's Plan tab for both of you (or, with an older back end,
+// kept on this device); put back if the save fails.
+async function pick(key, going) {
+  const was = state.picks[key]
+  state.picks[key] = going
+  render()
+  if (!state.sharedPlan) return store.set('rs-picks', state.picks)
+  try {
+    const j = await post({ action: 'pick', inspection: key, going, who: state.who }) // (key is the passcode's field)
+    if (!j.ok) throw new Error(j.error)
+  } catch {
+    if (was === undefined) delete state.picks[key]; else state.picks[key] = was
+    toast('That tick didn’t save. Try again.')
     render()
   }
 }
@@ -470,15 +489,17 @@ function mapItems() {
     .filter(x => !state.mapDay || x.insp)
 }
 /* the day planner: the Map with a day picked */
-// That day's inspections in time order, each with whether you're going (ticked in state.picks; untouched, it's the
-// places you've both said yes to, or you have) and how it sits with the ones you're going to: overlapping one
-// (clash), or starting too soon after the last one to get there (tight).
+// That day's inspections in time order, each with whether you're going (ticked in state.picks, shared by both of
+// you; untouched, it's the places either of you said yes to that neither said no to, so it starts the same on both
+// phones) and how it sits with the ones you're going to: overlapping one (clash), or starting too soon after the
+// last one to get there (tight).
 function planRows() {
   const rows = mapItems().filter(x => x.insp?.end).sort((a, b) => a.insp.start - b.insp.start)
-    .map(x => ({ ...x, key: `${x.l.id}/${x.insp.start.getTime()}` }))
+    .map(x => ({ ...x, key: `${x.l.id}|${x.insp.label}` }))
   let n = 0
   rows.forEach(r => {
-    r.on = r.key in state.picks ? state.picks[r.key] : combined(r.l) === 'both' || myVote(r.l) === 'yes'
+    const votes = [r.l.rhys_vote, r.l.partner_vote]
+    r.on = r.key in state.picks ? state.picks[r.key] : votes.includes('yes') && !votes.includes('no')
     if (r.on) r.n = ++n
   })
   rows.forEach((r, i) => {
@@ -522,7 +543,7 @@ function viewPlan(rows) {
         ${planFlag(r)}
       </div>
     </li>`).join('')}</ol>` : '<p class="empty">No inspections that day with these filters.</p>'}
-    <p class="sub plan-note">Drive times are rough guesses from the distance between places.</p>
+    <p class="sub plan-note">${state.sharedPlan ? 'Ticks are shared: you both see the same run. ' : ''}Drive times are rough guesses from the distance between places.</p>
   </section>`
 }
 // The ticked inspections as a calendar file (.ics): times in UTC, each with the address and the listing's link.
@@ -774,7 +795,7 @@ function wire() {
   document.querySelectorAll('[data-mf]').forEach(b => b.addEventListener('click', () => { state.mapFilter = b.dataset.mf; render() }))
   $('#map-day')?.addEventListener('change', e => { state.mapDay = e.target.value; render() })
   document.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => showOnMap(b.dataset.map)))
-  document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('change', () => { state.picks[b.dataset.pick] = b.checked; store.set('rs-picks', state.picks); render() }))
+  document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('change', () => pick(b.dataset.pick, b.checked)))
   document.querySelectorAll('[data-focus]').forEach(b => b.addEventListener('click', () => focusPin(b.dataset.focus)))
   $('#plan-ics')?.addEventListener('click', () => downloadIcs(planRows().filter(r => r.on)))
   wirePics()
