@@ -64,10 +64,12 @@ Listings from alerts have one photo and no inspection times or description, and 
 
 `id` is the listing's stable key (Domain's URL slug). Rescans match on it.
 `photos` holds every photo URL from the listing, one per line (card-sized, cropped to 4:3), `photos_large` the same photos uncropped and full size for the photo viewer, and `description` the ad text. `photo_url` is the single thumbnail used in lists. `lat`/`lng` place the listing on the map: a rescan takes them from Domain, and **Rental → Fill missing map locations** geocodes any still blank.
-Vote columns take `yes`, `maybe`, `no` or blank. The app derives:
-- **Both yes**: both voted yes
-- **Talk about it**: at least one vote, no "no"
+Vote columns take `yes`, `maybe`, `no` or blank. `maybe` is a **Favourite** (the star in the app): a yes and then some, so it counts as a yes everywhere, and starred listings get a ★ badge, come first, and have their own filter. The app derives:
+- **Both yes**: both voted yes or favourite
+- **Talk about it**: one of you voted yes or favourite, the other hasn't voted
 - **Out**: either voted no
 - **Gone**: `status` is `gone`
+
+The `Plan` tab holds the day planner's ticks, shared by both of you: one row per inspection (`<listing id>|<inspection>`), whether you're going, and who last changed it.
 
 Inspection times are written like `Wed 28 Oct, 4:45 - 5pm`, separated by `; `.

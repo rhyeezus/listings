@@ -17,7 +17,7 @@ const state = {
   loading: false,
   filter: 'mine',
   sort: 'score',
-  onlyBoth: false,
+  inspFilter: 'in', // the Inspections page shows: 'in' (all still in), 'both' (both yes) or 'fav' (favourites)
   history: [],
   back: '', // direction of the last undone vote, so its card can fly back in
   fetchedAt: null,
@@ -93,14 +93,23 @@ const clockOf = d => (d.getHours() % 12 || 12) + (d.getMinutes() ? ':' + String(
 const nextInsp = l => upcoming(l)[0] || null
 const myVote = l => l[state.who + '_vote'] || ''
 const otherKey = () => state.who === 'rhys' ? 'partner' : 'rhys'
+// A vote of "maybe" in the sheet is a Favourite (the star): a yes and then some. It counts as a yes everywhere,
+// and starred listings get a badge and come first.
+const VOTE_LABEL = { yes: 'Yes', maybe: 'Favourite', no: 'No' }
+const keen = v => v === 'yes' || v === 'maybe'
+const favs = l => [l.rhys_vote, l.partner_vote].filter(v => v === 'maybe').length // how many of you starred it
+const star = l => favs(l) ? '★ ' : ''
 function combined(l) {
   if (l.status === 'gone') return 'gone'
   const a = l.rhys_vote, b = l.partner_vote
   if (a === 'no' || b === 'no') return 'out'
-  if (a === 'yes' && b === 'yes') return 'both'
-  if (a || b) return 'split'
+  if (keen(a) && keen(b)) return 'both'
+  if (a || b) return 'split' // one of you is keen, the other hasn't voted
   return 'none'
 }
+// Your No / Favourite / Yes buttons; attr is the data attribute the view wires up.
+const voteButtons = (attr, v) => ['no', 'maybe', 'yes'].map(k =>
+  `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-${attr}="${k}" aria-pressed="${v === k}">${icon(k)}${VOTE_LABEL[k]}</button>`).join('')
 const active = () => state.listings.filter(l => l.status !== 'gone')
 
 /* ---------- api ---------- */
@@ -227,7 +236,12 @@ function chips(l) {
   if (Number(l.beds) && Number(l.beds) !== 2) c.push(`<span class="chip">${Number(l.beds)} bed</span>`)
   return c.join('')
 }
-const badge = l => l.status === 'gone' ? '<span class="badge gone">Gone</span>' : l.isNew ? '<span class="badge">New</span>' : ''
+// The photo's corner badges: Gone or New, and ★ when either of you starred it.
+function badge(l) {
+  const b = (l.status === 'gone' ? '<span class="badge gone">Gone</span>' : l.isNew ? '<span class="badge">New</span>' : '')
+    + (favs(l) ? `<span class="badge fav">★ ${favs(l) === 2 ? 'Both favourites' : 'Favourite'}</span>` : '')
+  return b ? `<span class="badges">${b}</span>` : ''
+}
 // A listing's photos as a carousel, used on swipe cards, grid cards and the inspection sheet: flick sideways on
 // a phone, arrows with a mouse, with a counter and dots. Photos off to the side load as they come near.
 // state.pic remembers which photo each listing is on, across views and re-renders (wirePics scrolls back to it).
@@ -259,7 +273,7 @@ function about(l, clamp = true) {
 function votesLine(l) {
   return `<div class="votes">${Object.entries(VOTERS).map(([k, name]) => {
     const v = l[k + '_vote'] || ''
-    return `<span class="vote ${v}"><b>${k === state.who ? 'You' : name}</b> ${v ? v[0].toUpperCase() + v.slice(1) : 'Not yet'}</span>`
+    return `<span class="vote ${v}"><b>${k === state.who ? 'You' : name}</b> ${v === 'maybe' ? '★ ' : ''}${v ? VOTE_LABEL[v] : 'Not yet'}</span>`
   }).join('')}</div>`
 }
 function inspBlock(l) {
@@ -322,7 +336,7 @@ function swipeCard(l, i, back) {
   const n = nextInsp(l)
   return `<article class="swipe-card${top ? ' top' : ''}${top && back ? ' back-' + back : ''}" style="--i:${i}" ${top ? `id="big" data-id="${esc(l.id)}"` : 'aria-hidden="true"'}>
     ${pics(l, { eager: i < 2, controls: top })}
-    ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Maybe</span>' : ''}
+    ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Favourite</span>' : ''}
     <div class="sc-info">
       <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button">Details</button>' : ''}</div>
       <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
@@ -347,7 +361,7 @@ function viewCard(l, opening, from) {
         ${detailsBody(l, inspBlock(l) + about(l, false) + locMap(l))}
       </div></div>
       <div class="sheet-foot">
-        <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-cv="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+        <div class="mine big" role="group" aria-label="Your vote">${voteButtons('cv', v)}</div>
       </div>
     </section>`
 }
@@ -362,7 +376,7 @@ function viewSwipe() {
     <div class="actions">
       <button class="act small undo" id="undo" type="button" aria-label="Undo last vote (U)" title="Undo (U)" ${state.history.length ? '' : 'disabled'}>${icon('undo')}</button>
       <button class="act no" data-act="no" type="button" aria-label="No (left arrow)" title="No (←)">${icon('no')}</button>
-      <button class="act small maybe" data-act="maybe" type="button" aria-label="Maybe (up arrow)" title="Maybe (↑)">${icon('maybe')}</button>
+      <button class="act small maybe" data-act="maybe" type="button" aria-label="Favourite (up arrow)" title="Favourite (↑)">${icon('maybe')}</button>
       <button class="act yes" data-act="yes" type="button" aria-label="Yes (right arrow)" title="Yes (→)">${icon('yes')}</button>
     </div>
   </section>`
@@ -373,16 +387,17 @@ function inspRows() {
   const rows = []
   active().forEach(l => {
     const c = combined(l)
-    if (!state.keep.has(l.id) && (c === 'out' || (state.onlyBoth && c !== 'both'))) return
+    const hidden = c === 'out' || (state.inspFilter === 'both' && c !== 'both') || (state.inspFilter === 'fav' && !favs(l))
+    if (!state.keep.has(l.id) && hidden) return
     upcoming(l).forEach(i => rows.push({ l, i, c, key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`,
       day: dayOf(i.start) }))
   })
-  return rows.sort((a, b) => a.i.start - b.i.start || (b.c === 'both') - (a.c === 'both'))
+  return rows.sort((a, b) => a.i.start - b.i.start || favs(b.l) - favs(a.l) || (b.c === 'both') - (a.c === 'both'))
 }
 function viewInspections(rows) {
   const head = `<div class="toolbar"><div><h2>Inspections</h2><p class="sub">Upcoming inspections, grouped by day. Tap one to see the ad and vote. Listings either of you said no to are hidden.</p></div>
-    <div class="seg" role="group" aria-label="Show"><button type="button" data-both="0" aria-pressed="${!state.onlyBoth}">All still in</button><button type="button" data-both="1" aria-pressed="${state.onlyBoth}">Both yes</button></div></div>`
-  if (!rows.length) return head + `<p class="empty">${state.onlyBoth ? 'Nothing you’ve both said yes to has an inspection coming up.' : 'No upcoming inspections.'}</p>`
+    <div class="seg" role="group" aria-label="Show">${[['in', 'All still in'], ['both', 'Both yes'], ['fav', '★ Favourites']].map(([k, n]) => `<button type="button" data-if="${k}" aria-pressed="${state.inspFilter === k}">${n}</button>`).join('')}</div></div>`
+  if (!rows.length) return head + `<p class="empty">${{ both: 'Nothing you’ve both said yes to has an inspection coming up.', fav: 'None of your favourites has an inspection coming up.' }[state.inspFilter] || 'No upcoming inspections.'}</p>`
   const days = new Map()
   rows.forEach(r => { if (!days.has(r.day)) days.set(r.day, []); days.get(r.day).push(r) })
   let html = ''
@@ -397,8 +412,8 @@ function viewInspections(rows) {
       html += `<a class="row" href="#inspections/${esc(key)}" data-key="${esc(key)}" data-c="${c}">
         <span class="t">${esc(i.label.split(', ')[1] || '')}</span>
         <span class="thumb">${l.thumb ? `<img src="${esc(l.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>
-        <span class="a"><b>${esc(l.address)}</b><br><span>${esc(l.suburb)} · ${money(l.price)}/wk</span></span>
-        <span class="v">${Object.entries(VOTERS).map(([k, n]) => { const v = l[k + '_vote']; return `<span class="vote ${v || ''}" title="${n}">${k === state.who ? 'You' : n}: ${v || '–'}</span>` }).join('')}</span>
+        <span class="a"><b>${star(l)}${esc(l.address)}</b><br><span>${esc(l.suburb)} · ${money(l.price)}/wk</span></span>
+        <span class="v">${Object.entries(VOTERS).map(([k, n]) => { const v = l[k + '_vote']; return `<span class="vote ${v || ''}" title="${n}">${k === state.who ? 'You' : n}: ${v ? VOTE_LABEL[v].toLowerCase() : '–'}</span>` }).join('')}</span>
       </a>`
     })
   })
@@ -423,7 +438,7 @@ function viewSheet(rows, key, opening) {
         ${detailsBody(l, when + about(l) + locMap(l))}
       </div></div>
       <div class="sheet-foot">
-        <div class="mine big" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-sv="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+        <div class="mine big" role="group" aria-label="Your vote">${voteButtons('sv', v)}</div>
         <div class="sheet-nav">
           <button class="ghost" id="sheet-prev" type="button" aria-label="Previous inspection" ${state.sheet.prev ? '' : 'disabled'}>‹ Prev</button>
           <span>${n + 1} of ${run.length} · ${esc(i.start.toLocaleDateString('en-AU', { weekday: 'long' }))}</span>
@@ -435,6 +450,7 @@ function viewSheet(rows, key, opening) {
 const FILTERS = [
   ['mine', 'Needs my vote', l => l.status !== 'gone' && !myVote(l)],
   ['both', 'Both yes', l => combined(l) === 'both'],
+  ['fav', '★ Favourites', l => favs(l) > 0 && !['out', 'gone'].includes(combined(l))],
   ['split', 'Talk about it', l => combined(l) === 'split'],
   ['out', 'Out', l => combined(l) === 'out'],
   ['all', 'All active', l => l.status !== 'gone'],
@@ -447,7 +463,7 @@ function viewAll() {
     if (state.sort === 'insp') return (nextInsp(a)?.start || Infinity) - (nextInsp(b)?.start || Infinity)
     if (state.sort === 'new') return String(b.added_on).localeCompare(String(a.added_on)) || b.score - a.score
     if (state.sort === 'suburb') return a.suburb.localeCompare(b.suburb) || a.price - b.price
-    return b.score - a.score || a.price - b.price
+    return favs(b) - favs(a) || b.score - a.score || a.price - b.price // Best match: favourites first
   })
   const counts = Object.fromEntries(FILTERS.map(([k, , fn]) => [k, state.listings.filter(fn).length]))
   return `<div class="toolbar">
@@ -460,7 +476,7 @@ function viewAll() {
       const v = myVote(l)
       return `<article class="card" data-c="${combined(l)}" data-id="${esc(l.id)}">${cardBody(l)}
         <div class="inner" style="padding-top:0">
-          <div class="mine" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-v="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+          <div class="mine" role="group" aria-label="Your vote">${voteButtons('v', v)}</div>
           <textarea id="note-${esc(l.id)}" data-note="${esc(l.id)}" placeholder="Your notes">${esc(l[state.who + '_note'] || '')}</textarea>
         </div></article>`
     }).join('')}</div>` : '<p class="empty">Nothing here.</p>'}`
@@ -473,6 +489,7 @@ function viewAll() {
 const MAP_FILTERS = [
   ['in', 'Still in', l => combined(l) !== 'out'],
   ['both', 'Both yes', l => combined(l) === 'both'],
+  ['fav', '★ Favourites', l => favs(l) > 0 && combined(l) !== 'out'],
   ['mine', 'Needs my vote', l => !myVote(l)],
   ['all', 'Everything', () => true],
 ]
@@ -499,7 +516,7 @@ function planRows() {
   let n = 0
   rows.forEach(r => {
     const votes = [r.l.rhys_vote, r.l.partner_vote]
-    r.on = r.key in state.picks ? state.picks[r.key] : votes.includes('yes') && !votes.includes('no')
+    r.on = r.key in state.picks ? state.picks[r.key] : votes.some(keen) && !votes.includes('no')
     if (r.on) r.n = ++n
   })
   rows.forEach((r, i) => {
@@ -538,7 +555,7 @@ function viewPlan(rows) {
       <span class="plan-n" aria-hidden="true">${r.on ? r.n : ''}</span>
       <div class="plan-body">
         <div class="plan-time">${clockOf(r.insp.start)} – ${clockOf(r.insp.end)}</div>
-        <button type="button" class="plan-addr" data-focus="${esc(r.l.id)}"><i class="dot ${combined(r.l)}"></i>${esc(r.l.address)}</button>
+        <button type="button" class="plan-addr" data-focus="${esc(r.l.id)}"><i class="dot ${combined(r.l)}"></i>${star(r.l)}${esc(r.l.address)}</button>
         <div class="sub">${esc(r.l.suburb)} · ${money(r.l.price)}/wk</div>
         ${planFlag(r)}
       </div>
@@ -595,7 +612,7 @@ const osmTiles = L => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.pn
   maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 })
 // A listing's pin: its label (price or time) coloured by where the votes stand.
-const pinIcon = (L, l, label, extra = '') => L.divIcon({ className: '', html: `<span class="pin ${combined(l)} ${extra}">${esc(label)}</span>`, iconSize: null, popupAnchor: [0, -30] })
+const pinIcon = (L, l, label, extra = '') => L.divIcon({ className: '', html: `<span class="pin ${combined(l)}${favs(l) ? ' fav' : ''} ${extra}">${esc(star(l) + label)}</span>`, iconSize: null, popupAnchor: [0, -30] })
 // The map ({ L, el, map, far, pins, fitFor }) is made once, by the first render that needs it (later renders
 // share the same promise, even while it loads), and moved into each render's #map-slot.
 let mapReady = null
@@ -630,7 +647,7 @@ function drawPins(ui) {
     const r = planned[l.id], label = insp ? clockOf(insp.start) : money(l.price)
     markers[l.id] = L.marker(l.geo, {
       icon: pinIcon(L, l, r?.on ? `${r.n} · ${label}` : label, r && !r.on ? 'skip' : ''),
-      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: (r?.on ? 400 : 0) + ({ both: 300, split: 200, none: 100 }[combined(l)] || 0),
+      title: `${l.address}, ${l.suburb}`, riseOnHover: true, zIndexOffset: (r?.on ? 400 : 0) + favs(l) * 50 + ({ both: 300, split: 200, none: 100 }[combined(l)] || 0),
     }).bindPopup(() => pinCard(l, insp), { minWidth: 220, maxWidth: 240 }).addTo(pins)
   })
   const route = plan.filter(r => r.on && r.l.geo).map(r => r.l.geo)
@@ -771,7 +788,7 @@ function wire() {
   const big = $('#big'); if (big) drag(big)
   $('#more')?.addEventListener('click', openCard)
   document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.f; render() }))
-  document.querySelectorAll('[data-both]').forEach(b => b.addEventListener('click', () => { state.onlyBoth = b.dataset.both === '1'; render() }))
+  document.querySelectorAll('[data-if]').forEach(b => b.addEventListener('click', () => { state.inspFilter = b.dataset.if; render() }))
   $('#sort')?.addEventListener('change', e => { state.sort = e.target.value; render() })
   document.querySelectorAll('.grid [data-v]').forEach(b => b.addEventListener('click', () => {
     const id = b.closest('.card').dataset.id, l = state.listings.find(x => x.id === id)
@@ -891,7 +908,7 @@ function sheetVote(v) {
     const to = t.run.slice(t.n + 1).find(open) || t.run.slice(0, t.n).find(open)
     if (to) return goSheet(to)
     const count = k => t.run.filter(r => myVote(r.l) === k).length
-    toast(`That’s ${t.row.i.start.toLocaleDateString('en-AU', { weekday: 'long' })} done: ${count('yes')} yes, ${count('maybe')} maybe, ${count('no')} no.`)
+    toast(`That’s ${t.row.i.start.toLocaleDateString('en-AU', { weekday: 'long' })} done: ${count('maybe')} favourite, ${count('yes')} yes, ${count('no')} no.`)
   }, 250)
 }
 

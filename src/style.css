@@ -62,8 +62,10 @@ h2 { font-size: 20px }
 .pics-track img { flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always }
 .pics .ph { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 12px; color: var(--bay); font: 700 15px var(--f-display) }
 .pics .ph span { display: block; font: 500 12px var(--f-body); color: var(--muted); margin-top: 4px }
-.badge { position: absolute; top: 10px; left: 10px; font: 700 11px var(--f-display); letter-spacing: .08em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; background: var(--primary); color: var(--primary-ink) }
-.badge.gone { background: var(--no) }
+.badges { position: absolute; top: 10px; left: 10px; right: 56px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none }
+.badge { font: 700 11px var(--f-display); letter-spacing: .08em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; background: var(--primary); color: var(--primary-ink) }
+.badge.gone { background: var(--no); color: #FFFFFF }
+.badge.fav { background: #FACC15; color: #0F172A } /* the star: gold on any photo, both themes */
 .inner { padding: 16px; display: flex; flex-direction: column; gap: 12px }
 .rent { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }
 .price { font: 800 28px/1 var(--f-display); font-variant-numeric: tabular-nums }
@@ -112,7 +114,6 @@ main.view-swipe { max-width: none }
 .swipe-card.top { cursor: pointer; touch-action: none; transition: transform .45s cubic-bezier(.2, 1.4, .4, 1) }
 .swipe-card.dragging { cursor: grabbing; transition: none }
 .swipe-card.flying { transition: transform .32s ease-in }
-.swipe-card .badge { z-index: 2 }
 /* the details sit at the bottom at their own height; the photo takes everything above them */
 .swipe-card .pics { flex: 1; min-height: 0; aspect-ratio: auto }
 .swipe-card .pics img { pointer-events: none } /* touches land on the track, which scrolls; the card's touch-action stops at it */
@@ -317,6 +318,7 @@ html.viewing { overflow: hidden }
 .flag.ok { background: var(--yes-soft); color: var(--yes) }
 .plan-note { font-size: 12px; margin: 0 }
 .pin.skip { opacity: .4 }
+.pin.fav { box-shadow: 0 0 0 2px #FACC15, 0 4px 10px -4px rgba(15,23,42,.6) } /* a gold ring: shows on dots too */
 .map .plan-line { stroke: var(--primary); stroke-width: 3; stroke-dasharray: 6 6; stroke-linecap: round; fill: none }
 /* a listing's Location map (inspection sheet and opened card) */
 .loc { display: flex; flex-direction: column; gap: 8px }
