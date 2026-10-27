@@ -29,7 +29,7 @@ const state = {
   history: [],
   back: '', // direction of the last undone vote, so its card can fly back in
   fetchedAt: null,
-  keep: new Set(), // listings opened on the inspections view: they stay in its list, whatever the vote, until you leave it
+  keep: new Map(), // listings opened on the inspections view -> whether they were voted out then: each stays in that list, whatever the vote, until you leave the view
   sheet: null, // the open inspection ad sheet: { row, prev, next }
   card: null, // the opened swipe card: { l }
   overlayPushed: false, // the sheet or card was opened from its page, so closing it can go back in history
@@ -406,32 +406,40 @@ function viewSwipe() {
   </section>`
 }
 // Upcoming inspections, earliest first, one row per inspection. key ("<id>/<start ms>", id URL-encoded) is the
-// row's address in the #inspections/<key> hash that opens its sheet.
+// row's address in the #inspections/<key> hash that opens its sheet. out: either of you said no, so it's listed
+// under Voted out (the filter only applies to the rest); a listing opened on this visit stays in the list it was in.
 function inspRows() {
   const rows = []
   active().forEach(l => {
-    const c = combined(l)
-    const hidden = c === 'out' || (state.inspFilter === 'both' && c !== 'both') || (state.inspFilter === 'fav' && !favs(l))
-    if (!state.keep.has(l.id) && hidden) return
-    upcoming(l).forEach(i => rows.push({ l, i, c, key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`,
+    const c = combined(l), kept = state.keep.has(l.id), out = kept ? state.keep.get(l.id) : c === 'out'
+    const hidden = (state.inspFilter === 'both' && c !== 'both') || (state.inspFilter === 'fav' && !favs(l))
+    if (!out && !kept && hidden) return
+    upcoming(l).forEach(i => rows.push({ l, i, c, out, key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`,
       day: dayOf(i.start) }))
   })
   return rows.sort((a, b) => a.i.start - b.i.start || favs(b.l) - favs(a.l) || (b.c === 'both') - (a.c === 'both'))
 }
 function viewInspections(rows) {
-  const head = `<div class="toolbar"><div><h2>Inspections</h2><p class="sub">Upcoming inspections, grouped by day. Tap one to see the ad and vote. Listings either of you said no to are hidden.</p></div>
+  const head = `<div class="toolbar"><div><h2>Inspections</h2><p class="sub">Upcoming inspections, grouped by day. Tap one to see the ad and vote. Places either of you said no to are listed separately, under Voted out.</p></div>
     <div class="seg" role="group" aria-label="Show">${[['in', 'All still in'], ['both', 'Both yes'], ['fav', '★ Favourites']].map(([k, n]) => `<button type="button" data-if="${k}" aria-pressed="${state.inspFilter === k}">${n}</button>`).join('')}</div></div>`
-  if (!rows.length) return head + `<p class="empty">${{ both: 'Nothing you’ve both said yes to has an inspection coming up.', fav: 'None of your favourites has an inspection coming up.' }[state.inspFilter] || 'No upcoming inspections.'}</p>`
+  const still = rows.filter(r => !r.out), out = rows.filter(r => r.out)
+  return head + (still.length ? `<div class="run">${runDays(still, true)}</div>`
+    : `<p class="empty">${{ both: 'Nothing you’ve both said yes to has an inspection coming up.', fav: 'None of your favourites has an inspection coming up.' }[state.inspFilter] || 'No upcoming inspections.'}</p>`)
+    + (out.length ? `<section class="run-out" aria-labelledby="out-title"><h3 id="out-title">Voted out <span class="sub">${out.length}</span></h3>
+      <p class="sub">Inspections for places either of you said no to, in case you want to look again.</p><div class="run">${runDays(out, false)}</div></section>` : '')
+}
+// One list's inspections grouped by day. voting: each day gets a count of the ones still to vote on, and a "Vote on"
+// button that opens the sheet at the first of them.
+function runDays(rows, voting) {
   const days = new Map()
   rows.forEach(r => { if (!days.has(r.day)) days.set(r.day, []); days.get(r.day).push(r) })
   let html = ''
-  // Each day's "Vote on" button opens the sheet at the first inspection you haven't voted on that day.
   days.forEach((run, d) => {
     const open = run.filter(r => !myVote(r.l)), start = open[0] || run[0]
     const wd = run[0].i.start.toLocaleDateString('en-AU', { weekday: 'long' })
     html += `<div class="day"><span class="day-d">${esc(d)}</span>
-      <span class="day-n">${run.length} inspection${run.length === 1 ? '' : 's'} · ${open.length ? `${open.length} to vote on` : 'all voted'}</span>
-      <a class="day-go" href="#inspections/${esc(start.key)}">${open.length ? 'Vote on' : 'Go through'} ${esc(wd)}</a></div>`
+      <span class="day-n">${run.length} inspection${run.length === 1 ? '' : 's'}${voting ? ` · ${open.length ? `${open.length} to vote on` : 'all voted'}` : ''}</span>
+      ${voting ? `<a class="day-go" href="#inspections/${esc(start.key)}">${open.length ? 'Vote on' : 'Go through'} ${esc(wd)}</a>` : ''}</div>`
     run.forEach(({ l, i, c, key }) => {
       html += `<a class="row" href="#inspections/${esc(key)}" data-key="${esc(key)}" data-c="${c}">
         <span class="t">${esc(i.label.split(', ')[1] || '')}</span>
@@ -441,14 +449,14 @@ function viewInspections(rows) {
       </a>`
     })
   })
-  return head + `<div class="run">${html}</div>`
+  return html
 }
-// The ad for one inspection row, with your vote and prev/next through that day's inspections.
-// A bottom sheet on phones, a side panel on wider screens.
+// The ad for one inspection row, with your vote and prev/next through that day's inspections (in the same list:
+// still in, or voted out). A bottom sheet on phones, a side panel on wider screens.
 function viewSheet(rows, key, opening) {
   const row = rows.find(x => x.key === key) || rows.find(x => x.key.split('/')[0] === key.split('/')[0])
   if (!row) return ''
-  const run = rows.filter(x => x.day === row.day), n = run.indexOf(row)
+  const run = rows.filter(x => x.day === row.day && x.out === row.out), n = run.indexOf(row)
   state.sheet = { row, run, n, prev: run[n - 1], next: run[n + 1] }
   const { l, i } = row, v = myVote(l)
   const when = `<div class="insp"><div class="lbl">This inspection</div><div class="when">${esc(i.label)}</div></div>`
@@ -767,7 +775,7 @@ function render() {
   const [r, ...sel] = route().split('/')
   if (r !== 'inspections') state.keep.clear()
   const sheetKey = r === 'inspections' && sel.length === 2 ? sel.join('/') : ''
-  if (sheetKey) state.keep.add(decodeURIComponent(sel[0]))
+  if (sheetKey) { const id = decodeURIComponent(sel[0]), l = state.listings.find(x => x.id === id); if (l && !state.keep.has(id)) state.keep.set(id, combined(l) === 'out') }
   // An opened card: the deck's top card (#swipe/open) or a map pin's listing (#map/<id>).
   const cardFor = r === 'swipe' && sel[0] === 'open' ? queue()[0]
     : r === 'map' && sel.length ? state.listings.find(l => l.id === decodeURIComponent(sel.join('/'))) : null
