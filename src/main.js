@@ -94,6 +94,9 @@ function shape(raw) {
   l.inArea = WHOLE_SUBURBS.includes(l.suburb) || !l.geo || within(l.geo, AREA)
   l.insp = parseInspections(l.inspections)
   l.score = score(l)
+  // The day it was added, as yyyy-mm-dd. Some rows hold the sheet's day number instead (days since 30 Dec 1899,
+  // 46322 = 27 Oct 2026), which would otherwise sort ahead of every real date.
+  if (/^\d{5}$/.test(String(l.added_on))) l.added_on = new Date(Date.UTC(1899, 11, 30) + l.added_on * 864e5).toISOString().slice(0, 10)
   l.isNew = l.added_on && (Date.now() - new Date(l.added_on).getTime()) < 3 * 864e5
   return l
 }
