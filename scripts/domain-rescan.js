@@ -14,9 +14,10 @@
 
 // Keep in step with the Search tab in the sheet.
 const DOMAIN_SEARCH = {
-  suburbs: ['elwood-vic-3184', 'st-kilda-vic-3182', 'st-kilda-east-vic-3183', 'st-kilda-west-vic-3182',
-    'balaclava-vic-3183', 'ripponlea-vic-3185', 'elsternwick-vic-3185', 'gardenvale-vic-3185',
-    'brighton-vic-3186', 'prahran-vic-3181', 'windsor-vic-3181'],
+  suburbs: ['elwood-vic-3184', 'ripponlea-vic-3185', 'elsternwick-vic-3185', 'gardenvale-vic-3185',
+    'caulfield-south-vic-3162', 'glen-huntly-vic-3163', 'ormond-vic-3204', 'mckinnon-vic-3204', 'bentleigh-vic-3204',
+    'bentleigh-east-vic-3165', 'brighton-vic-3186', 'brighton-east-vic-3187', 'hampton-vic-3188', 'hampton-east-vic-3188',
+    'sandringham-vic-3191', 'highett-vic-3190', 'windsor-vic-3181', 'prahran-vic-3181', 'south-yarra-vic-3141'],
   bedrooms: '2', price: '0-650', excludeDepositTaken: true,
 }
 

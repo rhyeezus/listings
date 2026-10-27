@@ -3,6 +3,14 @@ import './style.css'
 const API = import.meta.env.VITE_API_URL || ''
 const VOTERS = { rhys: 'Rhys', partner: 'Partner' }
 const BAYSIDE = ['Elwood', 'Elsternwick', 'Ripponlea', 'Balaclava', 'St Kilda', 'St Kilda East', 'St Kilda West', 'Brighton', 'Gardenvale', 'Black Rock']
+// The search area, as drawn on a map (27 Oct 2026): from Point Ormond to Glen Eira Rd, then along Glen Eira Rd,
+// Kambrook Rd, Neerim Rd, Grange Rd, North Rd, Warrigal Rd, South Rd, the Nepean Hwy and Bay Rd (traced from
+// OpenStreetMap), and back up the bay. Listings outside it are hidden (All's "Outside your area" lists them),
+// except in the suburbs taken whole. The sheet's Search tab lists every suburb the line takes in, plus these.
+const AREA = [[-37.88192, 144.97781], [-37.87626, 144.9925], [-37.88136, 145.03457], [-37.88568, 145.03376], [-37.88726, 145.04613],
+  [-37.88955, 145.04483], [-37.89312, 145.04602], [-37.90453, 145.04406], [-37.90958, 145.08511], [-37.93901, 145.07909],
+  [-37.93309, 145.03442], [-37.9575, 145.05213], [-37.9517, 145.0042], [-37.9517, 144.99], [-37.93, 144.972], [-37.905, 144.966], [-37.886, 144.968]]
+const WHOLE_SUBURBS = ['Windsor', 'Prahran', 'South Yarra']
 const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 }
 
 const store = {
@@ -82,10 +90,21 @@ function shape(raw) {
   l.thumb = l.photo_url || l.photos[0] || ''
   // Map position, ignoring anything outside Melbourne (the geocoder sometimes lands on "Australia").
   l.geo = +l.lat < -37.5 && +l.lat > -38.3 && +l.lng > 144.5 && +l.lng < 145.6 ? [+l.lat, +l.lng] : null
+  // In the search area. One with no map position yet can't be placed, so it counts as in.
+  l.inArea = WHOLE_SUBURBS.includes(l.suburb) || !l.geo || within(l.geo, AREA)
   l.insp = parseInspections(l.inspections)
   l.score = score(l)
   l.isNew = l.added_on && (Date.now() - new Date(l.added_on).getTime()) < 3 * 864e5
   return l
+}
+// Whether a [lat, lng] point is inside a polygon of them (ray casting).
+function within([lat, lng], poly) {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [ay, ax] = poly[i], [by, bx] = poly[j]
+    if ((ay > lat) !== (by > lat) && lng < (bx - ax) * (lat - ay) / (by - ay) + ax) inside = !inside
+  }
+  return inside
 }
 const upcoming = l => l.insp.filter(i => i.start && i.start >= new Date())
 const dayOf = d => d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' }) // "Wednesday 28 Oct"
@@ -110,7 +129,7 @@ function combined(l) {
 // Your No / Favourite / Yes buttons; attr is the data attribute the view wires up.
 const voteButtons = (attr, v) => ['no', 'maybe', 'yes'].map(k =>
   `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-${attr}="${k}" aria-pressed="${v === k}">${icon(k)}${VOTE_LABEL[k]}</button>`).join('')
-const active = () => state.listings.filter(l => l.status !== 'gone')
+const active = () => state.listings.filter(l => l.status !== 'gone' && l.inArea)
 
 /* ---------- api ---------- */
 async function load() {
@@ -455,17 +474,20 @@ const FILTERS = [
   ['out', 'Out', l => combined(l) === 'out'],
   ['all', 'All active', l => l.status !== 'gone'],
   ['gone', 'Gone', l => l.status === 'gone'],
+  ['away', 'Outside your area', l => l.status !== 'gone'],
 ]
+// All's filters look inside the search area, except "Outside your area".
+const inFilter = ([k, , fn]) => l => (k === 'away' ? !l.inArea : l.inArea) && fn(l)
 function viewAll() {
   const f = FILTERS.find(x => x[0] === state.filter) || FILTERS[0]
-  const L = state.listings.filter(f[2]).sort((a, b) => {
+  const L = state.listings.filter(inFilter(f)).sort((a, b) => {
     if (state.sort === 'price') return a.price - b.price
     if (state.sort === 'insp') return (nextInsp(a)?.start || Infinity) - (nextInsp(b)?.start || Infinity)
     if (state.sort === 'new') return String(b.added_on).localeCompare(String(a.added_on)) || b.score - a.score
     if (state.sort === 'suburb') return a.suburb.localeCompare(b.suburb) || a.price - b.price
     return favs(b) - favs(a) || b.score - a.score || a.price - b.price // Best match: favourites first
   })
-  const counts = Object.fromEntries(FILTERS.map(([k, , fn]) => [k, state.listings.filter(fn).length]))
+  const counts = Object.fromEntries(FILTERS.map(x => [x[0], state.listings.filter(inFilter(x)).length]))
   return `<div class="toolbar">
       <div class="seg" role="group" aria-label="Filter">${FILTERS.map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${state.filter === k}">${n} <span style="font-family:var(--f-data);opacity:.7">${counts[k]}</span></button>`).join('')}</div>
       <label class="sub" style="display:flex;gap:8px;align-items:center;margin:0">Sort
@@ -622,6 +644,7 @@ async function makeMap() {
   const el = document.createElement('div'); el.className = 'map-canvas'
   const map = L.map(el, { zoomSnap: 0.5 }).setView([-37.87, 144.99], 13)
   osmTiles(L).addTo(map)
+  L.polygon(AREA, { className: 'area-line', interactive: false }).addTo(map) // the search area's outline
   // Zoomed out, the pins are dots (100-odd price labels would pile up); zoomed in to street level, or with a day
   // picked (only that day's few), they show their labels.
   const far = () => el.classList.toggle('far', map.getZoom() < 15 && !state.mapDay)

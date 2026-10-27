@@ -116,14 +116,17 @@ function importScan_(b) {
 }
 
 // A Domain scan (from a browser or the API) into the sheet. Only suburbs on the Search tab are kept (Domain pads
-// searches with surrounding suburbs), and nothing is marked gone if the scan looks partial (fewer than 60% of the
-// active Domain listings).
+// searches with surrounding suburbs). Only Domain listings in those suburbs can be marked gone, since the scan can't
+// speak for others (such as a suburb since dropped from the search), and nothing is if the scan looks partial
+// (fewer than 60% of those still active).
 function mergeDomainScan_(rows, full) {
   const suburbs = readSearch_().suburbs.map(s => s.toLowerCase());
-  const inArea = rows.filter(r => suburbs.indexOf(String(r.suburb || '').toLowerCase()) >= 0);
-  const active = readListings_().rows.filter(r => r.status !== 'gone' && String(r.listing_url).includes('domain.com.au')).length;
+  const inSearch = r => suburbs.indexOf(String(r.suburb || '').toLowerCase()) >= 0;
+  const inArea = rows.filter(inSearch);
+  const canGo = r => isDomain_(r.listing_url) && inSearch(r);
+  const active = readListings_().rows.filter(r => r.status !== 'gone' && canGo(r)).length;
   const goneChecked = full && inArea.length >= active * 0.6;
-  const res = mergeListings_(inArea, goneChecked, 'domain.com.au');
+  const res = mergeListings_(inArea, goneChecked, canGo);
   res.goneChecked = goneChecked;
   res.outOfArea = rows.length - inArea.length;
   return res;
@@ -202,7 +205,9 @@ const DETAIL_LIMIT = 40;
 const NOT_CONFIGURED = 'Automatic rescans aren’t set up yet: add DOMAIN_CLIENT_ID and DOMAIN_CLIENT_SECRET (from developer.domain.com.au) in Project Settings > Script properties, then run Rental > Check Domain API access. Until then, ask Claude to rescan Domain from a browser.';
 const POSTCODES = { 'Elwood': '3184', 'St Kilda': '3182', 'St Kilda East': '3183', 'St Kilda West': '3182',
   'Balaclava': '3183', 'Ripponlea': '3185', 'Elsternwick': '3185', 'Gardenvale': '3185', 'Brighton': '3186',
-  'Brighton East': '3187', 'Prahran': '3181', 'Windsor': '3181', 'Black Rock': '3193' };
+  'Brighton East': '3187', 'Prahran': '3181', 'Windsor': '3181', 'South Yarra': '3141', 'Black Rock': '3193',
+  'Caulfield South': '3162', 'Glen Huntly': '3163', 'Ormond': '3204', 'McKinnon': '3204', 'Bentleigh': '3204',
+  'Bentleigh East': '3165', 'Hampton': '3188', 'Hampton East': '3188', 'Sandringham': '3191', 'Highett': '3190' };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function domainConfigured_() {
@@ -411,8 +416,8 @@ function mergeInbox_(full) {
   SpreadsheetApp.getUi().alert(`Merged: ${res.added} new, ${res.updated} updated, ${res.gone} marked gone.`);
 }
 
-// full: mark active rows the scan didn't return as gone. goneScope: only rows whose listing_url contains
-// it can be marked gone (an automatic Domain scan can't speak for realestate.com.au listings).
+// full: mark active rows the scan didn't return as gone. goneScope: which rows can be marked gone, as text their
+// listing_url contains or a test of the row (a Domain scan can't speak for realestate.com.au listings).
 function mergeListings_(incoming, full, goneScope) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -480,7 +485,8 @@ function mergeListings_(incoming, full, goneScope) {
 
     if (full) {
       rows.forEach((r, i) => {
-        if (r.status !== 'gone' && !seen[String(r.id)] && (!goneScope || String(r.listing_url).includes(goneScope))) {
+        const canGo = typeof goneScope === 'function' ? goneScope(r) : !goneScope || String(r.listing_url).includes(goneScope);
+        if (r.status !== 'gone' && !seen[String(r.id)] && canGo) {
           sheet.getRange(i + 2, header.indexOf('status') + 1).setValue('gone');
           gone++;
         }

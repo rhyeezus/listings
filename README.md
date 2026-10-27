@@ -32,6 +32,13 @@ Vite web app on Vercel  ──►  you and your partner, on any device
 
 Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
+## Search area
+
+The app shows listings inside the area drawn on a map (October 2026), plus all of Windsor, Prahran and South Yarra. The line runs from Point Ormond to Glen Eira Rd, then along Glen Eira Rd, Kambrook Rd, Neerim Rd, Grange Rd, North Rd, Warrigal Rd, South Rd, the Nepean Hwy and Bay Rd, and back up the bay; the Map tab shows its outline.
+- Listings outside it stay in the sheet with their votes, and are listed under **All → Outside your area**. One with no map position yet counts as inside.
+- The outline is `AREA`, and the suburbs taken whole are `WHOLE_SUBURBS`, at the top of `src/main.js`.
+- The `Search` tab's suburbs are every suburb the line takes in, plus the whole ones. Rescans and alert imports skip listings outside them, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
+
 ## Rescans
 
 The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos, the ad description and the map position on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
