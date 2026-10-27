@@ -22,6 +22,8 @@ Vite web app on Vercel  ──►  you and your partner, on any device
 
 "Anyone" means anyone with the URL can reach the script, but every request still needs the passcode.
 
+**Updating the back end:** after `apps-script/Code.gs` changes, paste it over `Code.gs` in Apps Script, save, then **Deploy → Manage deployments**, edit the existing deployment, set **Version: New version** and deploy. That keeps the same `/exec` URL, so the app needs no change. New columns are added to the end of the `Listings` tab on the next rescan or merge.
+
 ## 2. Deploy the app
 
 1. Import this repo into Vercel (framework preset: Vite).
@@ -32,7 +34,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Rescans
 
-The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability and agency on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
+The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos and the ad description on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
 
 **Domain, from a browser (the normal way):** Domain blocks requests from servers, so the scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
 1. Open the app (local or deployed) and sign in, so it has the passcode.
@@ -53,6 +55,7 @@ The import merges like a full scan:
 ## Columns
 
 `id` is the listing's stable key (Domain's URL slug). Rescans match on it.
+`photos` holds every photo URL from the listing, one per line, and `description` the ad text; the app shows both when you open a listing from Inspections. `photo_url` is the single thumbnail used in lists.
 Vote columns take `yes`, `maybe`, `no` or blank. The app derives:
 - **Both yes**: both voted yes
 - **Talk about it**: at least one vote, no "no"

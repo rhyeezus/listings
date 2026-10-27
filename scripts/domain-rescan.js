@@ -8,7 +8,7 @@
  *
  * Progress while it runs: window.__rescan (pages, done, total, failed).
  * The app posts the rows to the Apps Script web app (action "import"), which merges them like a
- * full scan: new listings added, price/inspections/availability/agency refreshed, other details only
+ * full scan: new listings added, price/inspections/availability/agency/photos/description refreshed, other details only
  * filled where blank, and Domain listings missing from the scan marked gone.
  */
 
@@ -45,6 +45,7 @@ const TYPES = { 'Apartment / Unit / Flat': 'Apartment/unit', 'House': 'House (pe
 const shortStreet = s => String(s).replace(/\bStreet\b/, 'St').replace(/\bRoad\b/, 'Rd').replace(/\bAvenue\b/, 'Ave').replace(/\bParade\b/, 'Pde')
 
 // One listing page -> a Listings row. Flooring, level and outdoor space come from the features and ad text.
+// Photos are the search result's gallery (720x540, phone-sized), falling back to the listing page's own.
 function toRow(slug, html, fromSearch) {
   const cp = nextData(html)
   const feats = (cp.features || []).join(' | ')
@@ -58,6 +59,8 @@ function toRow(slug, html, fromSearch) {
   const price = (String((cp.listingSummary || {}).title || fromSearch.price || '').replace(/,/g, '').match(/\$\s*(\d{3,4})/) || [])[1]
   const thumb = (html.match(/https:\/\/rimh2\.domainstatic\.com\.au\/[^"'\s\\]+?=\/640x360\/filters:format\(webp\):quality\(85\)\/[^"'\s\\]+/) || [])[0]
   const addr = fromSearch.address || {}
+  const photos = (fromSearch.images || []).length ? fromSearch.images
+    : ((cp.gallery || {}).slides || []).filter(s => s.mediaType === 'image').map(s => ((s.images || {}).mobile || {}).url).filter(Boolean)
   return {
     id: slug,
     address: shortStreet(addr.street || String((cp.inspection || {}).displayAddress || '').split(',')[0]),
@@ -73,7 +76,9 @@ function toRow(slug, html, fromSearch) {
     inspections: (((cp.inspection || {}).inspectionTimes) || []).map(t => inspection(t.openingDateTime, t.closingDateTime)).join('; '),
     available: available((stats.availableFrom || {}).iso8601Value),
     agency: cp.agencyName || '',
-    photo_url: thumb || (fromSearch.images || [])[0] || '',
+    photo_url: thumb || photos[0] || '',
+    photos: photos.join('\n'),
+    description: (cp.description || []).join('\n').trim(),
     listing_url: 'https://www.domain.com.au/' + slug,
     lat: addr.lat || '', lng: addr.lng || '',
     source: 'Domain',

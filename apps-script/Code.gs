@@ -20,14 +20,18 @@ const INBOX = 'Inbox';
 const VOTERS = ['rhys', 'partner'];
 const VOTES = ['yes', 'maybe', 'no', ''];
 
+// Columns missing from the Listings tab (photos and description came later) are added to the end of its
+// header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
 const COLUMNS = [
   'id', 'address', 'suburb', 'price', 'bond', 'type', 'beds', 'flooring', 'level', 'outdoor',
   'pets', 'inspections', 'available', 'agency', 'notes', 'photo_url', 'listing_url', 'lat', 'lng',
   'source', 'added_on', 'last_seen', 'status',
-  'rhys_vote', 'partner_vote', 'rhys_note', 'partner_note'
+  'rhys_vote', 'partner_vote', 'rhys_note', 'partner_note',
+  'photos', 'description'
 ];
 // Columns a rescan refreshes on an existing row whenever the scan has a value.
-const SCAN_FIELDS = ['price', 'inspections', 'available', 'agency', 'listing_url'];
+// photos: the listing's photo URLs, one per line. description: the ad text.
+const SCAN_FIELDS = ['price', 'inspections', 'available', 'agency', 'listing_url', 'photos', 'description'];
 // Columns a rescan only fills when the row's cell is empty, so hand-checked details and the
 // small photo thumbnails aren't replaced by rougher scan values.
 const FILL_FIELDS = ['bond', 'type', 'beds', 'flooring', 'level', 'outdoor', 'pets', 'notes', 'photo_url'];
@@ -80,11 +84,13 @@ function doPost(e) {
 // A Domain scan collected in a browser (scripts/domain-rescan.js), handed over by the app.
 // Only listing columns are accepted; votes, notes and status are never set from a scan.
 const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$/.test(c) && ['added_on', 'last_seen', 'status'].indexOf(c) < 0);
+// Longest value kept per field (a sheet cell holds up to 50,000 characters).
+const MAX_LENGTH = { photos: 20000, description: 10000 };
 function importScan_(b) {
   if (!Array.isArray(b.rows) || !b.rows.length || b.rows.length > 1000) return { ok: false, error: 'bad_rows', message: 'The scan had no listings, so nothing was changed.' };
   const rows = b.rows.map(r => {
     const o = {};
-    IMPORT_FIELDS.forEach(f => { if (r[f] !== undefined && r[f] !== null) o[f] = typeof r[f] === 'number' ? r[f] : String(r[f]).slice(0, 2000); });
+    IMPORT_FIELDS.forEach(f => { if (r[f] !== undefined && r[f] !== null) o[f] = typeof r[f] === 'number' ? r[f] : String(r[f]).slice(0, MAX_LENGTH[f] || 2000); });
     return o;
   }).filter(r => r.id && String(r.listing_url || '').indexOf('https://www.domain.com.au/') === 0);
   // Only suburbs on the Search tab (Domain pads searches with surrounding suburbs).
@@ -268,6 +274,7 @@ function mergeListings_(incoming, full, goneScope) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
+    ensureColumns_();
     const { sheet, header, rows } = readListings_();
     const today = Utilities.formatDate(new Date(), 'Australia/Melbourne', 'yyyy-MM-dd');
     const byId = {}; rows.forEach((r, i) => byId[String(r.id)] = i);
@@ -344,6 +351,18 @@ function geocodeMissing() {
 }
 
 /* ---------------- helpers ---------------- */
+// Adds any of COLUMNS the Listings header row is missing, at the end.
+function ensureColumns_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(LISTINGS);
+  const width = sheet.getLastColumn();
+  const header = sheet.getRange(1, 1, 1, width).getValues()[0].map(String);
+  const missing = COLUMNS.filter(c => header.indexOf(c) < 0);
+  if (!missing.length) return;
+  const need = width + missing.length - sheet.getMaxColumns();
+  if (need > 0) sheet.insertColumnsAfter(sheet.getMaxColumns(), need);
+  sheet.getRange(1, width + 1, 1, missing.length).setValues([missing]);
+}
+
 function readListings_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(LISTINGS);
   const values = sheet.getDataRange().getValues();
