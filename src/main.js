@@ -26,6 +26,7 @@ const state = {
   sheetPushed: false, // the sheet was opened from the list, so closing it can go back in history
   focusKey: '', // the row to put focus back on once the sheet closes
   gateError: '', // shown on the passcode page after a passcode is turned down
+  pic: {}, // listing id -> the photo its card is showing
 }
 
 const app = document.getElementById('app')
@@ -194,15 +195,33 @@ function chips(l) {
   return c.join('')
 }
 const badge = l => l.status === 'gone' ? '<span class="badge gone">Gone</span>' : l.isNew ? '<span class="badge">New</span>' : ''
-function photo(l) {
+// A card's photos, one at a time: tap the right of the photo for the next one, the left for the one before
+// (arrows too, with a mouse). Only the photo on show downloads. state.pic remembers where each listing is up to.
+function pics(l, { eager = false, controls = true } = {}) {
+  const ps = l.photos, n = ps.length, i = Math.min(state.pic[l.id] || 0, Math.max(n - 1, 0))
   const ph = `<div class="ph">${esc(l.suburb)}<span>No photo yet</span></div>`
-  const img = l.thumb ? `<img src="${esc(l.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''
-  return `<div class="photo">${ph}${img}${badge(l)}</div>`
+  const img = n ? `<img src="${esc(ps[i])}" alt="" ${eager ? '' : 'loading="lazy"'} draggable="false" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : ''
+  const nav = controls && n > 1 ? `<button class="gal-arrow prev" type="button" data-step="-1" aria-label="Previous photo">‹</button>
+    <button class="gal-arrow next" type="button" data-step="1" aria-label="Next photo">›</button>
+    <span class="gal-n">${i + 1} / ${n}</span>
+    <div class="gal-dots" aria-hidden="true">${ps.map((_, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</div>` : ''
+  return `<div class="pics" data-id="${esc(l.id)}">${ph}${img}${badge(l)}${nav}</div>`
 }
+function stepPics(el, dir) {
+  const l = state.listings.find(x => x.id === el.dataset.id); if (!l || l.photos.length < 2) return
+  const n = l.photos.length, i = ((state.pic[l.id] || 0) + dir + n) % n
+  state.pic[l.id] = i
+  const img = el.querySelector('img'); img.style.visibility = ''; img.src = l.photos[i]
+  el.querySelector('.gal-n').textContent = `${i + 1} / ${n}`
+  el.querySelectorAll('.gal-dots i').forEach((d, j) => d.classList.toggle('on', j === i))
+  new Image().src = l.photos[(i + dir + n) % n] // the next one along, so it's ready
+}
+// A tap on the left third steps back, anywhere else steps on.
+const tapPics = (el, x) => { const r = el.getBoundingClientRect(); stepPics(el, x < r.left + r.width / 3 ? -1 : 1) }
 // Every photo, side by side: swipe on a phone, arrows with a mouse. Used in the inspection sheet.
 function gallery(l) {
   const ps = l.photos, n = ps.length
-  if (n < 2) return photo(l)
+  if (n < 2) return pics(l, { eager: true })
   return `<div class="gal">
     <div class="gal-track" id="gal-track">${ps.map((u, i) => `<img src="${esc(u)}" alt="Photo ${i + 1} of ${n}" ${i ? 'loading="lazy"' : ''} referrerpolicy="no-referrer" draggable="false">`).join('')}</div>
     ${badge(l)}
@@ -212,14 +231,14 @@ function gallery(l) {
     <div class="gal-dots" aria-hidden="true">${ps.map((_, i) => `<i${i ? '' : ' class="on"'}></i>`).join('')}</div>
   </div>`
 }
-// The ad's own description, cut to a few lines until "Read more".
-function about(l) {
+// The ad's own description, cut to a few lines until "Read more" (clamp = false shows it all).
+function about(l, clamp = true) {
   const d = String(l.description || '').trim()
   if (!d) return ''
-  const long = d.length > 320
+  const long = clamp && d.length > 320, id = `about-${esc(l.id)}`
   return `<div class="about"><div class="lbl">About this place</div>
-    <p class="about-text${long ? ' clamp' : ''}" id="about-text">${esc(d)}</p>
-    ${long ? '<button class="ghost about-more" id="about-more" type="button" aria-expanded="false" aria-controls="about-text">Read more</button>' : ''}
+    <p class="about-text${long ? ' clamp' : ''}" id="${id}">${esc(d)}</p>
+    ${long ? `<button class="ghost about-more" type="button" aria-expanded="false" aria-controls="${id}">Read more</button>` : ''}
   </div>`
 }
 function votesLine(l) {
@@ -258,12 +277,13 @@ function detailsBody(l, lead = inspBlock(l)) {
     <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</div>
     ${links(l)}`
 }
+// A grid card: the inspection sheet's layout (photos, rent, address, features, inspection, description, details).
 function cardBody(l) {
-  return `${photo(l)}<div class="inner">
+  return `${pics(l)}<div class="inner">
     ${rentLine(l)}
     <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
     <div class="chips">${chips(l)}</div>
-    ${detailsBody(l)}
+    ${detailsBody(l, inspBlock(l) + about(l))}
   </div>`
 }
 
@@ -280,21 +300,23 @@ const ICONS = {
 }
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`
 
-// One card in the swipe stack. i = 0 is the top (interactive) card; the ones behind are decoration.
+// One card in the swipe stack: a compact version of the inspection sheet (photos, rent, address, features, next
+// inspection, the start of the description). Details opens the rest. i = 0 is the top (interactive) card; the
+// ones behind are decoration.
 function swipeCard(l, i, back) {
   const top = i === 0
   const n = nextInsp(l)
   return `<article class="swipe-card${top ? ' top' : ''}${top && back ? ' back-' + back : ''}" style="--i:${i}" ${top ? `id="big" data-id="${esc(l.id)}"` : 'aria-hidden="true"'}>
-    <div class="sc-photo"><span class="sc-ph">${esc(l.suburb)}</span>${l.photos[0] ? `<img src="${esc(l.photos[0])}" alt="" draggable="false" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
-    ${l.isNew ? '<span class="badge">New</span>' : ''}
+    ${pics(l, { eager: i < 2, controls: top })}
     ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Maybe</span>' : ''}
     <div class="sc-info">
-      ${rentLine(l)}
+      <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button" aria-expanded="false" aria-controls="details">Details</button>' : ''}</div>
       <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
-      <div class="sc-when">${n ? `Inspect ${esc(n.label)}` : 'No inspection listed'}</div>
-      ${top ? `<div class="chips">${chips(l)}</div><button class="sc-more" id="more" type="button" aria-expanded="false" aria-controls="details">Details</button>` : ''}
+      <div class="chips">${chips(l)}</div>
+      <div class="sc-when${n ? '' : ' none'}">${n ? `<span class="lbl">Inspect</span> ${esc(n.label)}` : 'No inspection listed'}</div>
+      ${l.description ? `<p class="sc-desc">${esc(l.description)}</p>` : ''}
     </div>
-    ${top ? `<div class="sc-details" id="details" hidden><button class="ghost sc-less" id="less" type="button">Hide details</button>${detailsBody(l)}</div>` : ''}
+    ${top ? `<div class="sc-details" id="details" hidden><button class="ghost sc-less" id="less" type="button">Hide details</button>${detailsBody(l, inspBlock(l) + about(l, false))}</div>` : ''}
   </article>`
 }
 function viewSwipe() {
@@ -406,7 +428,7 @@ function viewAll() {
       const v = myVote(l)
       return `<article class="card" data-c="${combined(l)}" data-id="${esc(l.id)}">${cardBody(l)}
         <div class="inner" style="padding-top:0">
-          <div class="mine" role="group" aria-label="Your vote">${['yes', 'maybe', 'no'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-v="${k}" aria-pressed="${v === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
+          <div class="mine" role="group" aria-label="Your vote">${['no', 'maybe', 'yes'].map(k => `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-v="${k}" aria-pressed="${v === k}">${icon(k)}${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
           <textarea id="note-${esc(l.id)}" data-note="${esc(l.id)}" placeholder="Your notes">${esc(l[state.who + '_note'] || '')}</textarea>
         </div></article>`
     }).join('')}</div>` : '<p class="empty">Nothing here.</p>'}`
@@ -502,10 +524,13 @@ function wire() {
   $('#sheet-prev')?.addEventListener('click', () => goSheet(state.sheet?.prev))
   $('#sheet-next')?.addEventListener('click', () => goSheet(state.sheet?.next))
   document.querySelectorAll('[data-sv]').forEach(b => b.addEventListener('click', () => sheetVote(b.dataset.sv)))
-  $('#about-more')?.addEventListener('click', e => {
-    const open = !$('#about-text').classList.toggle('clamp')
-    e.target.textContent = open ? 'Show less' : 'Read more'; e.target.setAttribute('aria-expanded', String(open))
-  })
+  document.querySelectorAll('.about-more').forEach(b => b.addEventListener('click', () => {
+    const open = !b.previousElementSibling.classList.toggle('clamp')
+    b.textContent = open ? 'Show less' : 'Read more'; b.setAttribute('aria-expanded', String(open))
+  }))
+  document.querySelectorAll('.pics [data-step]').forEach(b => b.addEventListener('click', () => stepPics(b.closest('.pics'), +b.dataset.step)))
+  // Grid cards: a tap on the photo steps through it. (The swipe card handles its own taps, in drag().)
+  document.querySelectorAll('.grid .pics').forEach(p => p.addEventListener('click', e => { if (!e.target.closest('button')) tapPics(p, e.clientX) }))
   wireGallery()
 }
 function wireGallery() {
@@ -571,7 +596,7 @@ function drag(el) {
   let s = null
   el.addEventListener('pointerdown', e => {
     if (e.button !== 0 || e.target.closest('a, button, .sc-details')) return
-    s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0 }
+    s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0, pics: e.target.closest('.pics') } // captured events all target the card, so note where it started
     el.setPointerCapture(e.pointerId); el.classList.add('dragging')
   })
   el.addEventListener('pointermove', e => {
@@ -585,10 +610,13 @@ function drag(el) {
   const end = e => {
     if (!s) return
     const held = e.timeStamp - s.t > 100 // paused before letting go: not a flick
-    const { dx, dy } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
+    const { dx, dy, pics } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
     s = null
     el.classList.remove('dragging')
-    if (Math.hypot(dx, dy) < TAP_SLOP) { el.style.transform = ''; showDrag(el, 0, 0); return showDetails(true) } // a tap, not a swipe
+    if (Math.hypot(dx, dy) < TAP_SLOP) { // a tap, not a swipe: on the photo it steps through the photos, below it opens the details
+      el.style.transform = ''; showDrag(el, 0, 0)
+      return pics ? tapPics(pics, e.clientX) : showDetails(true)
+    }
     const flickX = Math.abs(vx) > FLICK_SPEED && Math.abs(dx) > 40
     if (-dy > Math.abs(dx) && (dy < -SWIPE_DIST || (vy < -FLICK_SPEED && dy < -40))) return fling('maybe', dx, dy)
     if (dx > SWIPE_DIST || (flickX && vx > 0)) return fling('yes', dx, dy)
