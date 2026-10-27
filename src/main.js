@@ -195,40 +195,22 @@ function chips(l) {
   return c.join('')
 }
 const badge = l => l.status === 'gone' ? '<span class="badge gone">Gone</span>' : l.isNew ? '<span class="badge">New</span>' : ''
-// A card's photos, one at a time: tap the right of the photo for the next one, the left for the one before
-// (arrows too, with a mouse). Only the photo on show downloads. state.pic remembers where each listing is up to.
+// A listing's photos as a carousel, used on swipe cards, grid cards and the inspection sheet: flick sideways on
+// a phone, arrows with a mouse, with a counter and dots. Photos off to the side load as they come near.
+// state.pic remembers which photo each listing is on, across views and re-renders (wirePics scrolls back to it).
+// controls = false (the cards behind the top swipe card) shows just that photo.
 function pics(l, { eager = false, controls = true } = {}) {
-  const ps = l.photos, n = ps.length, i = Math.min(state.pic[l.id] || 0, Math.max(n - 1, 0))
+  const ps = l.photos, n = ps.length, at = Math.min(state.pic[l.id] || 0, Math.max(n - 1, 0))
   const ph = `<div class="ph">${esc(l.suburb)}<span>No photo yet</span></div>`
-  const img = n ? `<img src="${esc(ps[i])}" alt="" ${eager ? '' : 'loading="lazy"'} draggable="false" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : ''
-  const nav = controls && n > 1 ? `<button class="gal-arrow prev" type="button" data-step="-1" aria-label="Previous photo">‹</button>
-    <button class="gal-arrow next" type="button" data-step="1" aria-label="Next photo">›</button>
-    <span class="gal-n">${i + 1} / ${n}</span>
-    <div class="gal-dots" aria-hidden="true">${ps.map((_, j) => `<i${j === i ? ' class="on"' : ''}></i>`).join('')}</div>` : ''
-  return `<div class="pics" data-id="${esc(l.id)}">${ph}${img}${badge(l)}${nav}</div>`
-}
-function stepPics(el, dir) {
-  const l = state.listings.find(x => x.id === el.dataset.id); if (!l || l.photos.length < 2) return
-  const n = l.photos.length, i = ((state.pic[l.id] || 0) + dir + n) % n
-  state.pic[l.id] = i
-  const img = el.querySelector('img'); img.style.visibility = ''; img.src = l.photos[i]
-  el.querySelector('.gal-n').textContent = `${i + 1} / ${n}`
-  el.querySelectorAll('.gal-dots i').forEach((d, j) => d.classList.toggle('on', j === i))
-  new Image().src = l.photos[(i + dir + n) % n] // the next one along, so it's ready
-}
-// A tap on the left third steps back, anywhere else steps on.
-const tapPics = (el, x) => { const r = el.getBoundingClientRect(); stepPics(el, x < r.left + r.width / 3 ? -1 : 1) }
-// Every photo, side by side: swipe on a phone, arrows with a mouse. Used in the inspection sheet.
-function gallery(l) {
-  const ps = l.photos, n = ps.length
-  if (n < 2) return pics(l, { eager: true })
-  return `<div class="gal">
-    <div class="gal-track" id="gal-track">${ps.map((u, i) => `<img src="${esc(u)}" alt="Photo ${i + 1} of ${n}" ${i ? 'loading="lazy"' : ''} referrerpolicy="no-referrer" draggable="false">`).join('')}</div>
+  const img = (u, j) => `<img src="${esc(u)}" alt="${n > 1 ? `Photo ${j + 1} of ${n}` : ''}" ${eager && j === at ? '' : 'loading="lazy"'} draggable="false" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+  if (!controls || n < 2) return `<div class="pics" data-id="${esc(l.id)}">${ph}${n ? img(ps[at], at) : ''}${badge(l)}</div>`
+  return `<div class="pics" data-id="${esc(l.id)}">${ph}
+    <div class="pics-track">${ps.map(img).join('')}</div>
     ${badge(l)}
-    <button class="gal-arrow prev" id="gal-prev" type="button" aria-label="Previous photo">‹</button>
-    <button class="gal-arrow next" id="gal-next" type="button" aria-label="Next photo">›</button>
-    <span class="gal-n" id="gal-n" aria-live="polite">1 / ${n}</span>
-    <div class="gal-dots" aria-hidden="true">${ps.map((_, i) => `<i${i ? '' : ' class="on"'}></i>`).join('')}</div>
+    <button class="gal-arrow prev" type="button" data-step="-1" aria-label="Previous photo">‹</button>
+    <button class="gal-arrow next" type="button" data-step="1" aria-label="Next photo">›</button>
+    <span class="gal-n" aria-live="polite">${at + 1} / ${n}</span>
+    <div class="gal-dots" aria-hidden="true">${ps.map((_, j) => `<i${j === at ? ' class="on"' : ''}></i>`).join('')}</div>
   </div>`
 }
 // The ad's own description, cut to a few lines until "Read more" (clamp = false shows it all).
@@ -384,7 +366,7 @@ function viewSheet(rows, key, opening) {
   return `<div class="sheet-back" id="sheet-back"></div>
     <section class="sheet${opening ? ' opening' : ''}" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
       <button class="sheet-x" id="sheet-x" type="button" aria-label="Close">${icon('no')}</button>
-      <div class="sheet-body">${gallery(l)}<div class="inner">
+      <div class="sheet-body">${pics(l, { eager: true })}<div class="inner">
         ${rentLine(l)}
         <div><div class="addr" id="sheet-title">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
         <div class="chips">${chips(l)}</div>
@@ -475,7 +457,7 @@ function render() {
   const rows = r === 'inspections' ? inspRows() : []
   const view = state.loading && !state.listings.length ? '<p class="empty">Loading listings…</p>'
     : r === 'inspections' ? viewInspections(rows) : r === 'all' ? viewAll() : viewSwipe()
-  const was = state.sheet, sheetTop = $('.sheet-body')?.scrollTop || 0, galLeft = $('#gal-track')?.scrollLeft || 0
+  const was = state.sheet, sheetTop = $('.sheet-body')?.scrollTop || 0
   state.sheet = null
   const sheet = sheetKey ? viewSheet(rows, sheetKey, !was) : ''
   const scrollY = window.scrollY
@@ -496,10 +478,7 @@ function render() {
   if (r === 'all' || r === 'inspections') window.scrollTo(0, scrollY)
   wire()
   if (state.sheet && !was) $('#sheet').focus()
-  else if (state.sheet && was.row.key === state.sheet.row.key) {
-    $('.sheet-body').scrollTop = sheetTop
-    if ($('#gal-track')) $('#gal-track').scrollLeft = galLeft
-  }
+  else if (state.sheet && was.row.key === state.sheet.row.key) $('.sheet-body').scrollTop = sheetTop
   if (!state.sheet && state.focusKey) $(`.row[data-key="${CSS.escape(state.focusKey)}"]`)?.focus({ preventScroll: true })
   if (!state.sheet) state.focusKey = ''
 }
@@ -528,23 +507,23 @@ function wire() {
     const open = !b.previousElementSibling.classList.toggle('clamp')
     b.textContent = open ? 'Show less' : 'Read more'; b.setAttribute('aria-expanded', String(open))
   }))
-  document.querySelectorAll('.pics [data-step]').forEach(b => b.addEventListener('click', () => stepPics(b.closest('.pics'), +b.dataset.step)))
-  // Grid cards: a tap on the photo steps through it. (The swipe card handles its own taps, in drag().)
-  document.querySelectorAll('.grid .pics').forEach(p => p.addEventListener('click', e => { if (!e.target.closest('button')) tapPics(p, e.clientX) }))
-  wireGallery()
+  wirePics()
 }
-function wireGallery() {
-  const t = $('#gal-track'); if (!t) return
-  const n = t.children.length, dots = document.querySelectorAll('.gal-dots i')
-  const show = () => {
-    const i = Math.round(t.scrollLeft / t.clientWidth)
-    $('#gal-n').textContent = `${i + 1} / ${n}`
-    dots.forEach((d, j) => d.classList.toggle('on', j === i))
-  }
-  const step = dir => t.scrollBy({ left: dir * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
-  t.addEventListener('scroll', show, { passive: true })
-  $('#gal-prev').addEventListener('click', () => step(-1))
-  $('#gal-next').addEventListener('click', () => step(1))
+// Every carousel on the page: back to the listing's remembered photo, then keep the counter, dots and
+// state.pic in step as it scrolls.
+function wirePics() {
+  document.querySelectorAll('.pics-track').forEach(t => {
+    const p = t.parentElement, id = p.dataset.id, n = t.children.length, dots = p.querySelectorAll('.gal-dots i')
+    if (state.pic[id]) t.scrollLeft = state.pic[id] * t.clientWidth
+    t.addEventListener('scroll', () => {
+      const i = Math.round(t.scrollLeft / t.clientWidth)
+      state.pic[id] = i
+      p.querySelector('.gal-n').textContent = `${i + 1} / ${n}`
+      dots.forEach((d, j) => d.classList.toggle('on', j === i))
+    }, { passive: true })
+    p.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () =>
+      t.scrollBy({ left: +b.dataset.step * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })))
+  })
 }
 function showDetails(open) {
   const d = $('#details'); if (!d) return
@@ -595,8 +574,9 @@ function showDrag(el, dx, dy) {
 function drag(el) {
   let s = null
   el.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('a, button, .sc-details')) return
-    s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0, pics: e.target.closest('.pics') } // captured events all target the card, so note where it started
+    // The photo carousel scrolls on its own, so a drag that starts on it flicks photos; the card swipes from below it.
+    if (e.button !== 0 || e.target.closest('a, button, .sc-details, .pics-track')) return
+    s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0 }
     el.setPointerCapture(e.pointerId); el.classList.add('dragging')
   })
   el.addEventListener('pointermove', e => {
@@ -610,13 +590,10 @@ function drag(el) {
   const end = e => {
     if (!s) return
     const held = e.timeStamp - s.t > 100 // paused before letting go: not a flick
-    const { dx, dy, pics } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
+    const { dx, dy } = s, vx = held ? 0 : s.vx, vy = held ? 0 : s.vy
     s = null
     el.classList.remove('dragging')
-    if (Math.hypot(dx, dy) < TAP_SLOP) { // a tap, not a swipe: on the photo it steps through the photos, below it opens the details
-      el.style.transform = ''; showDrag(el, 0, 0)
-      return pics ? tapPics(pics, e.clientX) : showDetails(true)
-    }
+    if (Math.hypot(dx, dy) < TAP_SLOP) { el.style.transform = ''; showDrag(el, 0, 0); return showDetails(true) } // a tap, not a swipe
     const flickX = Math.abs(vx) > FLICK_SPEED && Math.abs(dx) > 40
     if (-dy > Math.abs(dx) && (dy < -SWIPE_DIST || (vy < -FLICK_SPEED && dy < -40))) return fling('maybe', dx, dy)
     if (dx > SWIPE_DIST || (flickX && vx > 0)) return fling('yes', dx, dy)
