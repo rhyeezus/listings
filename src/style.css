@@ -93,6 +93,12 @@ h2 { font-size: 20px }
 .vote.yes { background: var(--yes-soft); color: var(--yes); border-color: transparent }
 .vote.maybe { background: var(--maybe-soft); color: var(--maybe); border-color: transparent }
 .vote.no { background: var(--no-soft); color: var(--no); border-color: transparent }
+/* the Enquired tick, on every card: shared by both of you, with the day and who ticked it */
+.enq { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; -webkit-user-select: none }
+.enq input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer }
+.enq.on { border-color: var(--primary-text); color: var(--primary-text) }
+.enq-when { font: 500 12px var(--f-data); color: var(--muted) }
+.enq-when:empty { display: none }
 
 /* swipe: a stack of cards laid out like a compact inspection sheet (photo on top, details below). The top
    card follows the pointer; the ones behind sit a slot lower and smaller (--d), and rise as the top card is
@@ -123,6 +129,9 @@ main.view-swipe { max-width: none }
 .sc-when { padding: 7px 11px; border-radius: 10px; background: var(--bay-soft); font: 500 13px var(--f-data); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .sc-when .lbl { font: 600 11px var(--f-body); text-transform: uppercase; letter-spacing: .08em; color: var(--bay); margin-right: 4px }
 .sc-when.none { background: var(--bg); color: var(--muted); font-family: var(--f-body) }
+.sc-row { display: flex; align-items: center; gap: 8px }
+.sc-row > div { flex: 1; min-width: 0 }
+.sc-row .enq { flex: none; align-self: auto }
 .stamp { position: absolute; top: 28px; z-index: 2; font: 800 30px/1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; padding: 6px 12px; border: 4px solid; border-radius: 10px; opacity: 0; pointer-events: none; background: rgba(15,23,42,.3) }
 .stamp.yes { left: 22px; color: #84CC16; transform: rotate(-14deg) }
 .stamp.no { right: 22px; color: #F87171; transform: rotate(14deg) }

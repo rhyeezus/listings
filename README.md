@@ -94,6 +94,8 @@ Vote columns take `yes`, `maybe`, `no` or blank. `maybe` is a **Favourite** (the
 - **Out**: either voted no
 - **Gone**: `status` is `gone`
 
+`enquired` is the day either of you ticked **Enquired** on a card (you've asked the agent about the place), and `enquired_by` who ticked it. The tick is shared, so it shows for both of you. The two columns are added to the end of the `Listings` tab the first time someone ticks it, and rescans never change them.
+
 The `Plan` tab holds the day planner's ticks, shared by both of you: one row per inspection (`<listing id>|<inspection>`), whether you're going, and who last changed it.
 
 Inspection times are written like `Wed 28 Oct, 4:45 - 5pm`, separated by `; `.

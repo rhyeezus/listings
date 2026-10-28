@@ -2,8 +2,8 @@
  * Rental Shortlist back end (Google Apps Script, bound to the Google Sheet).
  *
  * Tabs:
- *   Listings  one row per listing (header row 1). Votes and notes live in their own columns
- *             and are never touched by a rescan.
+ *   Listings  one row per listing (header row 1). Votes, notes and the Enquired tick live in their own
+ *             columns and are never touched by a rescan.
  *   Inbox     paste fresh scan results here (same columns as Listings, votes left blank),
  *             then run  Rental > Merge inbox.
  *   Search    the saved search criteria, used by automatic rescans and by whoever rescans by hand.
@@ -27,14 +27,15 @@ const PLAN = 'Plan'; // the day planner's shared ticks (made on first use)
 const VOTERS = ['rhys', 'partner'];
 const VOTES = ['yes', 'maybe', 'no', ''];
 
-// Columns missing from the Listings tab (photos, description and photos_large came later) are added to the end of its
-// header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
+// Columns missing from the Listings tab (photos, description, photos_large and the enquired pair came later) are added to
+// the end of its header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
+// enquired: the day either of you asked the agent about the place (the app's Enquired tick); enquired_by: who did.
 const COLUMNS = [
   'id', 'address', 'suburb', 'price', 'bond', 'type', 'beds', 'flooring', 'level', 'outdoor',
   'pets', 'inspections', 'available', 'agency', 'notes', 'photo_url', 'listing_url', 'lat', 'lng',
   'source', 'added_on', 'last_seen', 'status',
   'rhys_vote', 'partner_vote', 'rhys_note', 'partner_note',
-  'photos', 'description', 'photos_large'
+  'photos', 'description', 'photos_large', 'enquired', 'enquired_by'
 ];
 // Columns a rescan refreshes on an existing row whenever the scan has a value.
 // photos: the listing's photo URLs (card-sized), one per line. photos_large: the same photos uncropped and full
@@ -101,8 +102,8 @@ function doPost(e) {
 }
 
 // A Domain scan collected in a browser (scripts/domain-rescan.js), handed over by the app.
-// Only listing columns are accepted; votes, notes and status are never set from a scan.
-const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$/.test(c) && ['added_on', 'last_seen', 'status'].indexOf(c) < 0);
+// Only listing columns are accepted; votes, notes, the Enquired tick and status are never set from a scan.
+const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$|^enquired/.test(c) && ['added_on', 'last_seen', 'status'].indexOf(c) < 0);
 // Longest value kept per field (a sheet cell holds up to 50,000 characters).
 const MAX_LENGTH = { photos: 20000, description: 10000, photos_large: 20000 };
 function importScan_(b) {
@@ -183,11 +184,14 @@ function writePick_(b) {
 }
 
 /* ---------------- votes ---------------- */
+// A vote, a note, or the Enquired tick (b.enquired true or false: shared by both of you, with the day and who ticked it).
 function writeVote_(b) {
   if (VOTERS.indexOf(b.who) < 0) return { ok: false, error: 'bad_voter' };
+  if (b.enquired !== undefined && typeof b.enquired !== 'boolean') return { ok: false, error: 'bad_enquired' };
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    if (b.enquired !== undefined) ensureColumns_(); // the enquired columns came later
     const { sheet, header, rows } = readListings_();
     const i = rows.findIndex(r => String(r.id) === String(b.id));
     if (i < 0) return { ok: false, error: 'not_found' };
@@ -198,6 +202,10 @@ function writeVote_(b) {
     }
     if (b.note !== undefined) {
       sheet.getRange(rowNum, header.indexOf(b.who + '_note') + 1).setValue(String(b.note).slice(0, 2000));
+    }
+    if (b.enquired !== undefined) {
+      sheet.getRange(rowNum, header.indexOf('enquired') + 1).setValue(b.enquired ? Utilities.formatDate(new Date(), 'Australia/Melbourne', 'yyyy-MM-dd') : '');
+      sheet.getRange(rowNum, header.indexOf('enquired_by') + 1).setValue(b.enquired ? b.who : '');
     }
     return { ok: true };
   } finally {
@@ -488,6 +496,7 @@ function mergeListings_(incoming, full, goneScope) {
         COLUMNS.forEach(c => o[c] = n[c] !== undefined ? n[c] : '');
         o.added_on = today; o.last_seen = today; o.status = 'active';
         VOTERS.forEach(v => { o[v + '_vote'] = ''; o[v + '_note'] = ''; });
+        o.enquired = ''; o.enquired_by = '';
         newRows.push(header.map(h => o[h] !== undefined ? o[h] : ''));
         added++;
       }

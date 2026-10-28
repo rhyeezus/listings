@@ -89,6 +89,8 @@ function shape(raw) {
   // 46322 = 27 Oct 2026), which would otherwise sort ahead of every real date.
   if (/^\d{5}$/.test(String(l.added_on))) l.added_on = new Date(Date.UTC(1899, 11, 30) + l.added_on * 864e5).toISOString().slice(0, 10)
   l.isNew = l.added_on && (Date.now() - new Date(l.added_on).getTime()) < 3 * 864e5
+  // The Enquired tick: the day either of you ticked it (yyyy-mm-dd) and who; a tick box put in the sheet by hand is TRUE.
+  l.enquired = l.enquired === true ? 'yes' : String(l.enquired || '').trim()
   return l
 }
 const upcoming = l => l.insp.filter(i => i.start && i.start >= new Date())
@@ -96,6 +98,13 @@ const dayOf = d => d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeri
 const clockOf = d => (d.getHours() % 12 || 12) + (d.getMinutes() ? ':' + String(d.getMinutes()).padStart(2, '0') : '') + (d.getHours() < 12 ? 'am' : 'pm') // "9:45am"
 const nextInsp = l => upcoming(l)[0] || null
 const myVote = l => l[state.who + '_vote'] || ''
+const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+// "28 Oct · you": when the Enquired tick went on, and who ticked it.
+function enqWhen(l) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(l.enquired)
+  return [m && new Date(+m[1], m[2] - 1, +m[3]).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }),
+    VOTERS[l.enquired_by] && (l.enquired_by === state.who ? 'you' : VOTERS[l.enquired_by])].filter(Boolean).join(' · ')
+}
 const otherKey = () => state.who === 'rhys' ? 'partner' : 'rhys'
 // A vote of "maybe" in the sheet is a Favourite (the star): a yes and then some. It counts as a yes everywhere,
 // and starred listings get a badge and come first.
@@ -188,6 +197,27 @@ function saveNote(id, text) {
     try { const j = await post({ action: 'vote', id, who: state.who, note: text }); if (!j.ok) throw 0 }
     catch { toast('Your note didn’t save. Try again.') }
   }, 800)
+}
+// The Enquired tick (box is its checkbox): shared by both of you, shown straight away and saved to the sheet with the
+// day and who ticked it; put back if the save fails. It updates its own label rather than re-rendering, so a map
+// pin's card stays open.
+async function enquire(box) {
+  const l = state.listings.find(x => x.id === box.dataset.enq)
+  if (!l) return
+  const on = box.checked, was = [l.enquired, l.enquired_by], label = box.closest('.enq')
+  const show = ([at, by]) => {
+    l.enquired = at; l.enquired_by = by; box.checked = !!at
+    label.classList.toggle('on', !!at); label.title = at ? 'Enquired ' + enqWhen(l) : ''
+    const when = label.querySelector('.enq-when'); if (when) when.textContent = enqWhen(l)
+  }
+  show(on ? [isoDay(new Date()), state.who] : ['', ''])
+  try {
+    const j = await post({ action: 'vote', id: l.id, who: state.who, enquired: on })
+    if (!j.ok) throw new Error(j.error)
+  } catch {
+    show(was)
+    toast('That tick didn’t save. Try again.')
+  }
 }
 // A Domain scan handed over by scripts/domain-rescan.js as #import=<json>. It waits in sessionStorage
 // until the app is signed in, then goes to the sheet with the stored passcode.
@@ -296,6 +326,12 @@ function votesLine(l) {
     return `<span class="vote ${v}"><b>${k === state.who ? 'You' : name}</b> ${v === 'maybe' ? '★ ' : ''}${v ? VOTE_LABEL[v] : 'Not yet'}</span>`
   }).join('')}</div>`
 }
+// The Enquired tick on every card: whether either of you has asked the agent about the place. short (the swipe card and
+// map pin card) leaves out when and who, which show on hover; live = false (the cards behind the top swipe card) keeps it out of the tab order.
+function enquiredBox(l, { short = false, live = true } = {}) {
+  const on = !!l.enquired
+  return `<label class="enq${on ? ' on' : ''}" title="${on ? 'Enquired ' + esc(enqWhen(l)) : ''}"><input type="checkbox" data-enq="${esc(l.id)}" ${on ? 'checked' : ''} ${live ? '' : 'tabindex="-1"'}>Enquired${short ? '' : `<span class="enq-when">${esc(enqWhen(l))}</span>`}</label>`
+}
 function inspBlock(l) {
   const n = nextInsp(l)
   if (!n) return '<div class="insp none"><div class="when">No inspection listed. Book through the agent.</div></div>'
@@ -314,7 +350,7 @@ function links(l) {
 function rentLine(l) {
   return `<div class="rent"><span class="price">${money(l.price)}<small> /wk</small></span>${l.bond ? `<span class="bond">bond ${money(l.bond)}</span>` : ''}</div>`
 }
-// Inspection, notes, votes, agency and links: shared by grid cards, the swipe card's details panel and the inspection
+// Inspection, notes, votes, the Enquired tick, agency and links: shared by grid cards, the swipe card's details panel and the inspection
 // sheet. lead replaces the opening inspection block (the sheet shows the row's own inspection and the description).
 function detailsBody(l, lead = inspBlock(l)) {
   const other = l[otherKey() + '_note']
@@ -323,6 +359,7 @@ function detailsBody(l, lead = inspBlock(l)) {
     ${l.notes ? `<p class="note">${esc(l.notes)}</p>` : ''}
     ${other ? `<p class="note"><b>${VOTERS[otherKey()]}:</b> ${esc(other)}</p>` : ''}
     ${votesLine(l)}
+    ${enquiredBox(l)}
     <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</div>
     ${links(l)}`
 }
@@ -349,7 +386,7 @@ const ICONS = {
 }
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`
 
-// One card in the swipe stack: photos, rent, address, features and the next inspection. Tapping it (or Details)
+// One card in the swipe stack: photos, rent, address, features, the next inspection and the Enquired tick. Tapping it (or Details)
 // opens the whole card (viewCard). i = 0 is the top (interactive) card; the ones behind are decoration.
 function swipeCard(l, i, back) {
   const top = i === 0
@@ -359,7 +396,7 @@ function swipeCard(l, i, back) {
     ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Favourite</span>' : ''}
     <div class="sc-info">
       <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button">Details</button>' : ''}</div>
-      <div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
+      <div class="sc-row"><div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>${enquiredBox(l, { short: true, live: top })}</div>
       <div class="chips">${chips(l)}</div>
       <div class="sc-when${n ? '' : ' none'}">${n ? `<span class="lbl">Inspect</span> ${esc(n.label)}` : 'No inspection listed'}</div>
     </div>
@@ -716,7 +753,7 @@ function showOnMap(id) {
   if (!mapItems().some(x => x.l.id === id)) { state.mapFilter = 'all'; state.mapDay = '' }
   location.hash = '#map'
 }
-// The pin's mini card: photo, rent, address, inspection and votes, with Open for the whole card.
+// The pin's mini card: photo, rent, address, inspection, votes and the Enquired tick, with Open for the whole card.
 function pinCard(l, insp) {
   const n = insp || nextInsp(l), el = document.createElement('div')
   el.className = 'pin-card'
@@ -726,8 +763,10 @@ function pinCard(l, insp) {
       <div><div class="pin-addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
       ${n ? `<div class="pin-when">Inspect ${esc(n.label)}</div>` : ''}
       ${votesLine(l)}
+      ${enquiredBox(l, { short: true })}
       <button class="primary pin-open" type="button">Open</button>
     </div>`
+  el.querySelector('[data-enq]').addEventListener('change', e => enquire(e.target))
   el.querySelector('.pin-open').addEventListener('click', () => { location.hash = '#map/' + encodeURIComponent(l.id) })
   return el
 }
@@ -823,6 +862,7 @@ function wire() {
     vote(id, myVote(l) === b.dataset.v ? '' : b.dataset.v)
   }))
   document.querySelectorAll('[data-note]').forEach(t => t.addEventListener('input', () => saveNote(t.dataset.note, t.value)))
+  document.querySelectorAll('[data-enq]').forEach(b => b.addEventListener('change', () => enquire(b)))
   $('#sheet-x')?.addEventListener('click', closeOverlay)
   $('#sheet-back')?.addEventListener('click', closeOverlay)
   $('#sheet-prev')?.addEventListener('click', () => goSheet(state.sheet?.prev))
@@ -955,7 +995,7 @@ function drag(el) {
   let s = null
   el.addEventListener('pointerdown', e => {
     // The photo carousel scrolls on its own, so a drag that starts on it flicks photos; the card swipes from below it.
-    if (e.button !== 0 || e.target.closest('a, button, .pics-track')) return
+    if (e.button !== 0 || e.target.closest('a, button, label, .pics-track')) return
     s = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, t: e.timeStamp, vx: 0, vy: 0 }
     el.setPointerCapture(e.pointerId); el.classList.add('dragging')
   })
@@ -1013,7 +1053,7 @@ function toast(msg, ms = 4000) { // ms = 0 keeps it up until the next toast
 }
 
 document.addEventListener('keydown', e => {
-  if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+  if (/TEXTAREA|SELECT/.test(e.target.tagName) || (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox')) return
   if (viewer) {
     if (e.key === 'Escape') { e.preventDefault(); history.back() }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); stepViewer(e.key === 'ArrowLeft' ? -1 : 1) }
