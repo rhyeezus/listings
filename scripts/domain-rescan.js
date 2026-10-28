@@ -18,7 +18,8 @@ const DOMAIN_SEARCH = {
     'ripponlea-vic-3185', 'elsternwick-vic-3185', 'gardenvale-vic-3185',
     'caulfield-south-vic-3162', 'glen-huntly-vic-3163', 'ormond-vic-3204', 'mckinnon-vic-3204', 'bentleigh-vic-3204',
     'bentleigh-east-vic-3165', 'brighton-vic-3186', 'brighton-east-vic-3187', 'hampton-vic-3188', 'hampton-east-vic-3188',
-    'sandringham-vic-3191', 'highett-vic-3190', 'windsor-vic-3181', 'prahran-vic-3181', 'south-yarra-vic-3141'],
+    'sandringham-vic-3191', 'highett-vic-3190', 'windsor-vic-3181', 'prahran-vic-3181', 'south-yarra-vic-3141',
+    'richmond-vic-3121', 'hawthorn-vic-3122', 'hawthorn-east-vic-3123'],
   bedrooms: '2', price: '0-650', excludeDepositTaken: true,
 }
 
@@ -123,8 +124,12 @@ async function domainRescan(search = DOMAIN_SEARCH) {
 }
 
 // Opens the app with the scan attached; the app (signed in with the passcode) sends it to the sheet.
+// Chrome won't open a link over 2MB, so a scan that big leaves out photos_large (the sheet keeps the ones it has).
 function domainRescanHandoff(appUrl) {
   const st = window.__rescan
   if (!st || !st.finished) throw new Error('Run domainRescan() first')
-  location.href = appUrl.replace(/\/$/, '') + '/#import=' + encodeURIComponent(JSON.stringify({ full: st.failed.length === 0, rows: st.rows }))
+  const link = rows => appUrl.replace(/\/$/, '') + '/#import=' + encodeURIComponent(JSON.stringify({ full: st.failed.length === 0, rows }))
+  let url = link(st.rows)
+  if (url.length > 2e6) url = link(st.rows.map(({ photos_large, ...r }) => r))
+  location.href = url
 }

@@ -34,7 +34,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Search area
 
-The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Glen Huntly, Ormond, McKinnon, Bentleigh, Bentleigh East, Brighton, Brighton East, Hampton, Hampton East, Sandringham, Highett, Windsor, Prahran and South Yarra. The app shows every listing in the sheet.
+The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Glen Huntly, Ormond, McKinnon, Bentleigh, Bentleigh East, Brighton, Brighton East, Hampton, Hampton East, Sandringham, Highett, Windsor, Prahran, South Yarra, Richmond, Hawthorn and Hawthorn East. The app shows every listing in the sheet.
 - Rescans and alert imports skip listings outside these suburbs, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
 - Keep `DOMAIN_SEARCH` at the top of `scripts/domain-rescan.js`, and the saved searches on Domain and realestate.com.au that send the alert emails, in step with it.
 
@@ -42,10 +42,13 @@ The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Ki
 
 The sheet is the source of truth. A rescan adds new listings and refreshes price, inspections, availability, agency, photos, the ad description and the map position on existing ones. Other details (type, flooring, level, outdoor, photo and so on) are only filled in where blank, and votes and notes are never touched.
 
-**Domain, from a browser (works without an API key):** Domain's website blocks requests from servers, so this scan runs in a real browser tab and the app hands the results to the sheet. Ask Claude to "rescan Domain", or do it yourself:
-1. Open the app (local or deployed) and sign in, so it has the passcode.
-2. In another tab, open any www.domain.com.au page, paste `scripts/domain-rescan.js` into the console, and run `await domainRescan()` (about 1.5 seconds per listing; progress is in `window.__rescan`). Keep `DOMAIN_SEARCH` at the top of the script in step with the `Search` tab.
-3. Run `domainRescanHandoff('<app url>')`. That tab opens the app, which imports the scan and shows a summary.
+**Domain, from a browser (works without an API key):** Domain's website blocks requests from servers, so this scan runs in a real browser tab and the app hands the results to the sheet.
+- **On a schedule:** a Claude scheduled task, "Shortlist Domain rescan", runs it at 7am and 6pm in the Claude desktop app on Rhys's Mac. It opens Domain in the app's browser pane, runs `scripts/domain-rescan.js`, and hands the scan to the live site, which is signed in there. The Mac has to be awake with the Claude app open; a run missed while the app is closed happens when it next opens. If you change the times (in the app's scheduled tasks), change `SCAN_TIMES` in `src/main.js` to match.
+- **The Rescan button** shows when the last scan reached the sheet ("Scanned 7:04am"), and pressing it says what that scan found. `Code.gs` keeps the last scan in the `LAST_SCAN` script property.
+- **By hand:** ask Claude to "rescan Domain", or do it yourself:
+  1. Open the app (local or deployed) and sign in, so it has the passcode.
+  2. In another tab, open any www.domain.com.au page, paste `scripts/domain-rescan.js` into the console, and run `await domainRescan()` (about 1.5 seconds per listing; progress is in `window.__rescan`). Keep `DOMAIN_SEARCH` at the top of the script in step with the `Search` tab.
+  3. Run `domainRescanHandoff('<app url>')`. That tab opens the app, which imports the scan and shows a summary. Chrome won't open a link over 2MB, so a scan that big leaves out the full-size photos (the sheet keeps the ones it has).
 
 The import merges like a full scan:
 - new listings are added, with flooring, floor level and outdoor space read from the ad text and features

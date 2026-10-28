@@ -85,7 +85,7 @@ function disableAutoRescan() {
 function doGet(e) {
   if (!authorised_(e.parameter.key)) return json_({ ok: false, error: 'bad_passcode' });
   const rows = readListings_().rows;
-  return json_({ ok: true, listings: rows, plan: readPlan_(), fetchedAt: new Date().toISOString() });
+  return json_({ ok: true, listings: rows, plan: readPlan_(), scan: lastScan_(), fetchedAt: new Date().toISOString() });
 }
 
 function doPost(e) {
@@ -129,7 +129,18 @@ function mergeDomainScan_(rows, full) {
   const res = mergeListings_(inArea, goneChecked, canGo);
   res.goneChecked = goneChecked;
   res.outOfArea = rows.length - inArea.length;
+  if (res.ok) saveLastScan_(res, inArea.length);
   return res;
+}
+
+// When the last Domain scan went into the sheet and what it found, for the app's Rescan button.
+function saveLastScan_(res, found) {
+  PropertiesService.getScriptProperties().setProperty('LAST_SCAN', JSON.stringify({
+    at: new Date().toISOString(), found: found, added: res.added, updated: res.updated, gone: res.gone, goneChecked: res.goneChecked
+  }));
+}
+function lastScan_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('LAST_SCAN') || 'null'); } catch (err) { return null; }
 }
 
 function authorised_(key) {
@@ -207,7 +218,8 @@ const POSTCODES = { 'Elwood': '3184', 'St Kilda': '3182', 'St Kilda East': '3183
   'Balaclava': '3183', 'Ripponlea': '3185', 'Elsternwick': '3185', 'Gardenvale': '3185', 'Brighton': '3186',
   'Brighton East': '3187', 'Prahran': '3181', 'Windsor': '3181', 'South Yarra': '3141', 'Black Rock': '3193',
   'Caulfield South': '3162', 'Glen Huntly': '3163', 'Ormond': '3204', 'McKinnon': '3204', 'Bentleigh': '3204',
-  'Bentleigh East': '3165', 'Hampton': '3188', 'Hampton East': '3188', 'Sandringham': '3191', 'Highett': '3190' };
+  'Bentleigh East': '3165', 'Hampton': '3188', 'Hampton East': '3188', 'Sandringham': '3191', 'Highett': '3190',
+  'Richmond': '3121', 'Hawthorn': '3122', 'Hawthorn East': '3123' };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function domainConfigured_() {

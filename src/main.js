@@ -21,6 +21,7 @@ const state = {
   history: [],
   back: '', // direction of the last undone vote, so its card can fly back in
   fetchedAt: null,
+  scan: null, // the last Domain scan to reach the sheet: { at, found, added, updated, gone, goneChecked }
   keep: new Map(), // listings opened on the inspections view -> whether they were voted out then: each stays in that list, whatever the vote, until you leave the view
   sheet: null, // the open inspection ad sheet: { row, prev, next }
   card: null, // the opened swipe card: { l }
@@ -129,6 +130,7 @@ async function load() {
     state.listings = j.listings.map(shape)
     state.sharedPlan = !!j.plan
     state.picks = j.plan || store.get('rs-picks', {})
+    state.scan = j.scan || null
     state.fetchedAt = new Date()
     runImport()
   } catch (e) {
@@ -208,13 +210,26 @@ async function runImport() {
     await load()
   } catch (e) { toast('The import didn’t go through: ' + (e.message || e), 10000) }
 }
+// When the scheduled Domain scan runs: a Claude scheduled task on Rhys's Mac (README, Rescans).
+const SCAN_TIMES = '7am and 6pm'
+// When the last Domain scan reached the sheet, short for the button ("7:04am" today, "yesterday", "Mon" this
+// week, else "28 Oct") or long for the toast ("today 7:04am", "Mon 6:02pm").
+function scanWhen(at, long) {
+  const d = new Date(at), days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(at).setHours(0, 0, 0, 0)) / 864e5)
+  const day = days <= 0 ? 'today' : days === 1 ? 'yesterday' : days < 7 ? d.toLocaleDateString('en-AU', { weekday: 'short' }) : d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+  return long ? `${day} ${clockOf(d)}` : days <= 0 ? clockOf(d) : day
+}
+const scanText = s => `Last scan ${scanWhen(s.at, true)}: ${s.found} listings, ${s.added} new, ${s.gone} marked gone${s.goneChecked ? '' : ' (gone check skipped: the scan looked partial)'}.`
 async function rescan() {
   const b = $('#rescan'); if (b) b.disabled = true
   try {
     const j = await post({ action: 'rescan' })
     if (j.ok) { toast(`Rescan done: ${j.added} new, ${j.gone} gone.`); await load() }
-    // No Domain API keys (it's a paid plan), so rescans run in a browser on domain.com.au (scripts/domain-rescan.js).
-    else if (j.error === 'not_configured') toast('Rescans run from a browser on domain.com.au for now: ask Claude to rescan Domain. New listings also come in from the alert emails.', 10000)
+    // No Domain API keys (it's a paid plan), so Domain is scanned in a browser on a schedule (scripts/domain-rescan.js).
+    else if (j.error === 'not_configured') {
+      toast(`Domain is scanned at ${SCAN_TIMES} from Rhys’s Mac. ${state.scan ? scanText(state.scan) : 'No scan has reached the sheet yet.'} Alert emails add new listings hourly too.`, 10000)
+      await load()
+    }
     else toast(j.message || 'Rescan didn’t run.')
   } catch { toast('Rescan didn’t run. Check your connection.') }
   if (b) b.disabled = false
@@ -776,7 +791,7 @@ function render() {
       </nav>
       <div class="who">Voting as <b style="color:var(--ink)">${VOTERS[state.who]}</b>
         <button class="ghost" id="switch" type="button">Switch</button>
-        <button class="ghost" id="rescan" type="button">Rescan</button>
+        <button class="ghost" id="rescan" type="button" ${state.scan ? `title="${scanText(state.scan)}"` : ''}>${state.scan ? 'Scanned ' + scanWhen(state.scan.at) : 'Rescan'}</button>
       </div>
     </div></header>
     <main class="view-${r}">${view}</main>${sheet}`
