@@ -323,7 +323,6 @@ html.viewing { overflow: hidden }
 .pin.skip { opacity: .4 }
 .pin.fav { box-shadow: 0 0 0 2px #FACC15, 0 4px 10px -4px rgba(15,23,42,.6) } /* a gold ring: shows on dots too */
 .map .plan-line { stroke: var(--primary); stroke-width: 3; stroke-dasharray: 6 6; stroke-linecap: round; fill: none }
-.map .area-line { stroke: var(--bay); stroke-width: 2; stroke-dasharray: 2 6; stroke-linecap: round; fill: var(--bay); fill-opacity: .05 }
 /* a listing's Location map (inspection sheet and opened card) */
 .loc { display: flex; flex-direction: column; gap: 8px }
 .loc .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600 }

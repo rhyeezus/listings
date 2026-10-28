@@ -34,10 +34,9 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Search area
 
-The app shows listings inside the area drawn on a map (October 2026), plus all of Windsor, Prahran and South Yarra. The line runs from Point Ormond to Glen Eira Rd, then along Glen Eira Rd, Kambrook Rd, Neerim Rd, Grange Rd, North Rd, Warrigal Rd, South Rd, the Nepean Hwy and Bay Rd, and back up the bay; the Map tab shows its outline.
-- Listings outside it stay in the sheet with their votes, and are listed under **All → Outside your area**. One with no map position yet counts as inside.
-- The outline is `AREA`, and the suburbs taken whole are `WHOLE_SUBURBS`, at the top of `src/main.js`.
-- The `Search` tab's suburbs are every suburb the line takes in, plus the whole ones. Rescans and alert imports skip listings outside them, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
+The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Glen Huntly, Ormond, McKinnon, Bentleigh, Bentleigh East, Brighton, Brighton East, Hampton, Hampton East, Sandringham, Highett, Windsor, Prahran and South Yarra. The app shows every listing in the sheet.
+- Rescans and alert imports skip listings outside these suburbs, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
+- Keep `DOMAIN_SEARCH` at the top of `scripts/domain-rescan.js`, and the saved searches on Domain and realestate.com.au that send the alert emails, in step with it.
 
 ## Rescans
 
