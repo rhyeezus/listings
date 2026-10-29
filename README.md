@@ -34,7 +34,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 ## Search area
 
-The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Glen Huntly, Ormond, McKinnon, Bentleigh, Bentleigh East, Brighton, Brighton East, Hampton, Hampton East, Sandringham, Highett, Windsor, Prahran, South Yarra, Richmond, Hawthorn and Hawthorn East. The app shows every listing in the sheet.
+The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Brighton, Brighton East, Windsor, Prahran, South Yarra, Richmond, Hawthorn and Hawthorn East. The app shows every listing in the sheet.
 - Rescans and alert imports skip listings outside these suburbs, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
 - Keep `DOMAIN_SEARCH` at the top of `scripts/domain-rescan.js`, and the saved searches on Domain and realestate.com.au that send the alert emails, in step with it.
 
