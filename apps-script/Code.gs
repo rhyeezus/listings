@@ -119,14 +119,16 @@ function importScan_(b) {
 }
 
 // A Domain scan (from a browser or the API) into the sheet. Only suburbs on the Search tab are kept (Domain pads
-// searches with surrounding suburbs). Only Domain listings in those suburbs can be marked gone, since the scan can't
-// speak for others (such as a suburb since dropped from the search), and nothing is if the scan looks partial
-// (fewer than 60% of those still active).
+// searches with surrounding suburbs). Only Domain listings in those suburbs and the tab's rent range can be marked
+// gone, since the scan can't speak for others (such as a suburb since dropped from the search, or a rent below a
+// raised minimum), and nothing is if the scan looks partial (fewer than 60% of those still active).
 function mergeDomainScan_(rows, full) {
-  const suburbs = readSearch_().suburbs.map(s => s.toLowerCase());
+  const search = readSearch_(), suburbs = search.suburbs.map(s => s.toLowerCase());
   const inSearch = r => suburbs.indexOf(String(r.suburb || '').toLowerCase()) >= 0;
+  const rent = r => Number(r.price) || 0; // a rent the sheet doesn't know counts as in range
+  const inRange = r => !rent(r) || (!search.minPrice || rent(r) >= search.minPrice) && (!search.maxPrice || rent(r) <= search.maxPrice);
   const inArea = rows.filter(inSearch);
-  const canGo = r => isDomain_(r.listing_url) && inSearch(r);
+  const canGo = r => isDomain_(r.listing_url) && inSearch(r) && inRange(r);
   const active = readListings_().rows.filter(r => r.status !== 'gone' && canGo(r)).length;
   const goneChecked = full && inArea.length >= active * 0.6;
   const res = mergeListings_(inArea, goneChecked, canGo);
@@ -270,6 +272,7 @@ function readSearch_() {
   return {
     suburbs: (o['Suburbs'] || '').split(',').map(s => s.trim()).filter(Boolean),
     beds: Number(o['Bedrooms']) || null,
+    minPrice: Number(o['Min rent per week']) || null,
     maxPrice: Number(o['Max rent per week']) || null,
     excludeDepositTaken: /^y/i.test(o['Exclude deposit taken'] || '')
   };
@@ -279,7 +282,7 @@ function readSearch_() {
 function searchBody_(page) {
   const s = readSearch_();
   return {
-    listingType: 'Rent', minBedrooms: s.beds, maxBedrooms: s.beds, maxPrice: s.maxPrice,
+    listingType: 'Rent', minBedrooms: s.beds, maxBedrooms: s.beds, minPrice: s.minPrice, maxPrice: s.maxPrice,
     excludeDepositTaken: s.excludeDepositTaken, pageSize: 100, pageNumber: page,
     locations: s.suburbs.map(sub => ({ state: 'VIC', suburb: sub, postCode: POSTCODES[sub] || '', includeSurroundingSuburbs: false }))
   };

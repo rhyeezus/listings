@@ -18,7 +18,7 @@ const DOMAIN_SEARCH = {
     'ripponlea-vic-3185', 'elsternwick-vic-3185', 'gardenvale-vic-3185', 'caulfield-south-vic-3162',
     'brighton-vic-3186', 'brighton-east-vic-3187', 'windsor-vic-3181', 'prahran-vic-3181', 'south-yarra-vic-3141',
     'richmond-vic-3121', 'hawthorn-vic-3122', 'hawthorn-east-vic-3123'],
-  bedrooms: '2', price: '0-650', excludeDepositTaken: true,
+  bedrooms: '2', price: '550-700', excludeDepositTaken: true,
 }
 
 const nextData = html => JSON.parse(html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/)[1]).props.pageProps.componentProps

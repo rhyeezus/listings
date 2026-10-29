@@ -36,6 +36,7 @@ Local development: `npm install`, then `VITE_API_URL=<url> npm run dev`.
 
 The search is the `Search` tab's suburbs: Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Brighton, Brighton East, Windsor, Prahran, South Yarra, Richmond, Hawthorn and Hawthorn East. The app shows every listing in the sheet.
 - Rescans and alert imports skip listings outside these suburbs, and a rescan only marks listings in them as gone, so dropping a suburb doesn't mark its listings gone.
+- The rent range is the `Search` tab's **Min rent per week** and **Max rent per week** ($550 to $700, 2 bedrooms). A rescan only marks listings with a rent in that range as gone, so changing it doesn't mark the ones now outside it gone.
 - Keep `DOMAIN_SEARCH` at the top of `scripts/domain-rescan.js`, and the saved searches on Domain and realestate.com.au that send the alert emails, in step with it.
 
 ## Rescans
@@ -74,7 +75,7 @@ This needs paid access: on developer.domain.com.au, **Agents & Listings** (the l
 
 To set it up, for each site:
 1. Sign in to domain.com.au or realestate.com.au with the **same Google account that owns the sheet** (the alerts have to land in that Gmail).
-2. Search **Rent** with the suburbs, bedrooms and maximum rent from the `Search` tab (on Domain, also tick the filter that excludes deposit taken). Save the search with email alerts on, as often as it allows (as soon as listings are added, or daily). On Domain that's **Save search** (the bell) on the results; check **Account → Preferences → Email preferences** has property alerts on.
+2. Search **Rent** with the suburbs, bedrooms and rent range from the `Search` tab (on Domain, also tick the filter that excludes deposit taken). Save the search with email alerts on, as often as it allows (as soon as listings are added, or daily). On Domain that's **Save search** (the bell) on the results; check **Account → Preferences → Email preferences** has property alerts on.
 3. When the first alert has arrived, run **Rental → Preview Domain alerts** (or **Preview realestate.com.au alerts**). Google asks you to allow Gmail access the first time. Check the list looks right; if it says no listings were found, the email layout needs a tweak.
 4. Run **Rental → Import alerts now**, then **Rental → Turn on hourly alert import** (one import covers both sites).
 

@@ -1,7 +1,8 @@
 Setting,Value
 Suburbs,"Elwood, St Kilda, St Kilda East, St Kilda West, Balaclava, Ripponlea, Elsternwick, Gardenvale, Caulfield South, Brighton, Brighton East, Windsor, Prahran, South Yarra, Richmond, Hawthorn, Hawthorn East"
 Bedrooms,2
-Max rent per week,650
+Min rent per week,550
+Max rent per week,700
 Property types,Any
 Exclude deposit taken,Yes
 Source,Domain.com.au
