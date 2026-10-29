@@ -18,6 +18,7 @@ const state = {
   filter: 'mine',
   sort: 'score',
   inspFilter: 'in', // the Inspections page shows: 'in' (all still in), 'both' (both yes) or 'fav' (favourites)
+  inspPast: false, // the Inspections page lists past inspections (Past) instead of today's and upcoming ones, until you leave it
   history: [],
   back: '', // direction of the last undone vote, so its card can fly back in
   fetchedAt: null,
@@ -44,19 +45,23 @@ const money = n => (n === '' || n == null) ? '' : '$' + Number(n).toLocaleString
 
 /* ---------- data shaping ---------- */
 function parseInspections(text) {
-  // "Wed 28 Oct, 4:45 - 5pm; Thu 29 Oct, 12:30 - 12:45pm"
+  // "Wed 28 Oct, 4:45 - 5pm; Thu 29 Oct, 12:30 - 12:45pm". past_inspections adds the year ("Wed 28 Oct 2026, 4:45 - 5pm"),
+  // which the label leaves out.
   const now = new Date()
   return String(text || '').split(';').map(s => s.trim()).filter(Boolean).map(s => {
-    const m = s.match(/^\w{3} (\d{1,2}) (\w{3}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i)
-    if (!m) return { label: s, start: null, end: null }
-    const [, d, mon, h, mi, ap1, h2, mi2, ap2] = m
+    const label = s.replace(/^(\w{3} \d{1,2} \w{3}) \d{4},/, '$1,')
+    const m = s.match(/^\w{3} (\d{1,2}) (\w{3})(?: (\d{4}))?,\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i)
+    if (!m) return { label, start: null, end: null }
+    const [, d, mon, y, h, mi, ap1, h2, mi2, ap2] = m
     const minutes = (hr, min, ap) => ((+hr % 12) + (ap.toLowerCase() === 'pm' ? 12 : 0)) * 60 + +(min || 0)
     const endAt = minutes(h2, mi2, ap2)
     let startAt = minutes(h, mi, ap1 || ap2) // no am/pm on the start: the end's
     if (!ap1 && startAt > endAt) startAt -= 12 * 60 // "11:45 - 12:05pm" starts in the morning
-    let year = now.getFullYear()
-    if (MONTHS[mon] < now.getMonth() - 6) year++
-    return { label: s, start: new Date(year, MONTHS[mon], +d, 0, startAt), end: new Date(year, MONTHS[mon], +d, 0, endAt) }
+    // No year: the closest such day to today (in January, December's times are last year's).
+    let year = +y || now.getFullYear()
+    if (!y && MONTHS[mon] < now.getMonth() - 6) year++
+    else if (!y && MONTHS[mon] > now.getMonth() + 6) year--
+    return { label, start: new Date(year, MONTHS[mon], +d, 0, startAt), end: new Date(year, MONTHS[mon], +d, 0, endAt) }
   })
 }
 function score(l) {
@@ -83,7 +88,9 @@ function shape(raw) {
   l.thumb = l.photo_url || l.photos[0] || ''
   // Map position, ignoring anything outside Melbourne (the geocoder sometimes lands on "Australia").
   l.geo = +l.lat < -37.5 && +l.lat > -38.3 && +l.lng > 144.5 && +l.lng < 145.6 ? [+l.lat, +l.lng] : null
-  l.insp = parseInspections(l.inspections)
+  // Inspection times: the ones listed now, then any a rescan has since dropped once they'd happened (past_inspections).
+  const listed = parseInspections(l.inspections), at = new Set(listed.map(i => i.start?.getTime()))
+  l.insp = listed.concat(parseInspections(l.past_inspections).filter(i => i.start && !at.has(i.start.getTime())))
   l.score = score(l)
   // The day it was added, as yyyy-mm-dd. Some rows hold the sheet's day number instead (days since 30 Dec 1899,
   // 46322 = 27 Oct 2026), which would otherwise sort ahead of every real date.
@@ -93,10 +100,13 @@ function shape(raw) {
   l.enquired = l.enquired === true ? 'yes' : String(l.enquired || '').trim()
   return l
 }
-const upcoming = l => l.insp.filter(i => i.start && i.start >= new Date())
+const upcoming = l => l.insp.filter(i => i.start && i.end > new Date()) // not over yet: one on now still counts
 const dayOf = d => d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' }) // "Wednesday 28 Oct"
 const clockOf = d => (d.getHours() % 12 || 12) + (d.getMinutes() ? ':' + String(d.getMinutes()).padStart(2, '0') : '') + (d.getHours() < 12 ? 'am' : 'pm') // "9:45am"
 const nextInsp = l => upcoming(l)[0] || null
+const lastInsp = l => l.insp.filter(i => i.start && i.end <= new Date()).sort((a, b) => b.start - a.start)[0] || null // the latest one that's over
+const dayStart = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+const PAST_DAYS = 30 // how far back the Inspections page's Past list goes
 const myVote = l => l[state.who + '_vote'] || ''
 const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 // "28 Oct · you": when the Enquired tick went on, and who ticked it.
@@ -120,6 +130,9 @@ function combined(l) {
   if (a || b) return 'split' // one of you is keen, the other hasn't voted
   return 'none'
 }
+// The votes alone, whether or not the place has since gone (for the Inspections page's Past list).
+const votedOut = l => l.rhys_vote === 'no' || l.partner_vote === 'no'
+const bothKeen = l => keen(l.rhys_vote) && keen(l.partner_vote)
 // Your No / Favourite / Yes buttons; attr is the data attribute the view wires up.
 const voteButtons = (attr, v) => ['no', 'maybe', 'yes'].map(k =>
   `<button type="button" class="${k} ${v === k ? 'on' : ''}" data-${attr}="${k}" aria-pressed="${v === k}">${icon(k)}${VOTE_LABEL[k]}</button>`).join('')
@@ -333,7 +346,8 @@ function enquiredBox(l, { short = false, live = true } = {}) {
   return `<label class="enq${on ? ' on' : ''}" title="${on ? 'Enquired ' + esc(enqWhen(l)) : ''}"><input type="checkbox" data-enq="${esc(l.id)}" ${on ? 'checked' : ''} ${live ? '' : 'tabindex="-1"'}>Enquired${short ? '' : `<span class="enq-when">${esc(enqWhen(l))}</span>`}</label>`
 }
 function inspBlock(l) {
-  const n = nextInsp(l)
+  const n = nextInsp(l), last = !n && lastInsp(l)
+  if (last) return `<div class="insp none"><div class="lbl">Last inspection</div><div class="when">${esc(last.label)}. None coming up.</div></div>`
   if (!n) return '<div class="insp none"><div class="when">No inspection listed. Book through the agent.</div></div>'
   const more = upcoming(l).length - 1
   return `<div class="insp"><div class="lbl">Next inspection</div><div class="when">${esc(n.label)}${more > 0 ? ` <span style="color:var(--muted)">+${more} more</span>` : ''}</div></div>`
@@ -390,7 +404,7 @@ const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 // opens the whole card (viewCard). i = 0 is the top (interactive) card; the ones behind are decoration.
 function swipeCard(l, i, back) {
   const top = i === 0
-  const n = nextInsp(l)
+  const n = nextInsp(l), last = !n && lastInsp(l)
   return `<article class="swipe-card${top ? ' top' : ''}${top && back ? ' back-' + back : ''}" style="--i:${i}" ${top ? `id="big" data-id="${esc(l.id)}"` : 'aria-hidden="true"'}>
     ${pics(l, { eager: i < 2, controls: top })}
     ${top ? '<span class="stamp yes" data-stamp="yes">Yes</span><span class="stamp no" data-stamp="no">Nope</span><span class="stamp maybe" data-stamp="maybe">Favourite</span>' : ''}
@@ -398,7 +412,7 @@ function swipeCard(l, i, back) {
       <div class="sc-head">${rentLine(l)}${top ? '<button class="ghost sc-more" id="more" type="button">Details</button>' : ''}</div>
       <div class="sc-row"><div><div class="addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>${enquiredBox(l, { short: true, live: top })}</div>
       <div class="chips">${chips(l)}</div>
-      <div class="sc-when${n ? '' : ' none'}">${n ? `<span class="lbl">Inspect</span> ${esc(n.label)}` : 'No inspection listed'}</div>
+      <div class="sc-when${n ? '' : ' none'}">${n ? `<span class="lbl">Inspect</span> ${esc(n.label)}` : last ? `<span class="lbl">Last inspection</span> ${esc(last.label.split(', ')[0])}, ${clockOf(last.start)}` : 'No inspection listed'}</div>
     </div>
   </article>`
 }
@@ -438,26 +452,34 @@ function viewSwipe() {
     </div>
   </section>`
 }
-// Upcoming inspections, earliest first, one row per inspection. key ("<id>/<start ms>", id URL-encoded) is the
-// row's address in the #inspections/<key> hash that opens its sheet. out: either of you said no, so it's listed
-// under Voted out (the filter only applies to the rest); a listing opened on this visit stays in the list it was in.
+// The Inspections page's rows, one per inspection: today's and upcoming ones, earliest first (today's stay all day,
+// marked on now or done), or (Past) the ones before today from the last PAST_DAYS days, newest day first, places
+// since gone included. key ("<id>/<start ms>", id URL-encoded) is the row's address in the #inspections/<key> hash
+// that opens its sheet. out: either of you said no, so it's listed under Voted out (the filter only applies to the
+// rest); a listing opened on this visit stays in the list it was in.
 function inspRows() {
-  const rows = []
-  active().forEach(l => {
-    const c = combined(l), kept = state.keep.has(l.id), out = kept ? state.keep.get(l.id) : c === 'out'
-    const hidden = (state.inspFilter === 'both' && c !== 'both') || (state.inspFilter === 'fav' && !favs(l))
+  const rows = [], now = new Date(), today = dayStart(now), past = state.inspPast, from = new Date(today - PAST_DAYS * 864e5)
+  ;(past ? state.listings : active()).forEach(l => {
+    const c = combined(l), kept = state.keep.has(l.id), out = kept ? state.keep.get(l.id) : votedOut(l)
+    const hidden = (state.inspFilter === 'both' && !bothKeen(l)) || (state.inspFilter === 'fav' && !favs(l))
     if (!out && !kept && hidden) return
-    upcoming(l).forEach(i => rows.push({ l, i, c, out, key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`,
-      day: dayOf(i.start) }))
+    l.insp.filter(i => i.start && (past ? i.start < today && i.start >= from : i.start >= today)).forEach(i => rows.push({ l, i, c, out,
+      key: `${encodeURIComponent(l.id)}/${i.start.getTime()}`, day: dayOf(i.start),
+      when: past ? '' : i.end <= now ? 'done' : i.start <= now ? 'now' : '' }))
   })
-  return rows.sort((a, b) => a.i.start - b.i.start || favs(b.l) - favs(a.l) || (b.c === 'both') - (a.c === 'both'))
+  const day = r => dayStart(r.i.start).getTime()
+  return rows.sort((a, b) => (past ? day(b) - day(a) : 0) || a.i.start - b.i.start || favs(b.l) - favs(a.l) || (b.c === 'both') - (a.c === 'both'))
 }
 function viewInspections(rows) {
-  const head = `<div class="toolbar"><div><h2>Inspections</h2><p class="sub">Upcoming inspections, grouped by day. Tap one to see the ad and vote. Places either of you said no to are listed separately, under Voted out.</p></div>
-    <div class="seg" role="group" aria-label="Show">${[['in', 'All still in'], ['both', 'Both yes'], ['fav', '★ Favourites']].map(([k, n]) => `<button type="button" data-if="${k}" aria-pressed="${state.inspFilter === k}">${n}</button>`).join('')}</div></div>`
+  const past = state.inspPast
+  const head = `<div class="toolbar"><div><h2>Inspections</h2><p class="sub">${past ? `Inspections from the last ${PAST_DAYS} days, newest first.` : 'Today’s and upcoming inspections, grouped by day.'} Tap one to see the ad and vote. Places either of you said no to are listed separately, under Voted out.</p></div>
+    <div class="segs"><div class="seg" role="group" aria-label="When">${[['', 'Upcoming'], ['past', 'Past']].map(([k, n]) => `<button type="button" data-iw="${k}" aria-pressed="${past === !!k}">${n}</button>`).join('')}</div>
+    <div class="seg" role="group" aria-label="Show">${[['in', 'All still in'], ['both', 'Both yes'], ['fav', '★ Favourites']].map(([k, n]) => `<button type="button" data-if="${k}" aria-pressed="${state.inspFilter === k}">${n}</button>`).join('')}</div></div></div>`
   const still = rows.filter(r => !r.out), out = rows.filter(r => r.out)
+  const empty = past ? [`None of the places you’ve both said yes to had an inspection in the last ${PAST_DAYS} days.`, `None of your favourites had an inspection in the last ${PAST_DAYS} days.`, `No inspections in the last ${PAST_DAYS} days.`]
+    : ['Nothing you’ve both said yes to has an inspection coming up.', 'None of your favourites has an inspection coming up.', 'No upcoming inspections.']
   return head + (still.length ? `<div class="run">${runDays(still, true)}</div>`
-    : `<p class="empty">${{ both: 'Nothing you’ve both said yes to has an inspection coming up.', fav: 'None of your favourites has an inspection coming up.' }[state.inspFilter] || 'No upcoming inspections.'}</p>`)
+    : `<p class="empty">${{ both: empty[0], fav: empty[1] }[state.inspFilter] || empty[2]}</p>`)
     + (out.length ? `<section class="run-out" aria-labelledby="out-title"><h3 id="out-title">Voted out <span class="sub">${out.length}</span></h3>
       <p class="sub">Inspections for places either of you said no to, in case you want to look again.</p><div class="run">${runDays(out, false)}</div></section>` : '')
 }
@@ -473,11 +495,11 @@ function runDays(rows, voting) {
     html += `<div class="day"><span class="day-d">${esc(d)}</span>
       <span class="day-n">${run.length} inspection${run.length === 1 ? '' : 's'}${voting ? ` · ${open.length ? `${open.length} to vote on` : 'all voted'}` : ''}</span>
       ${voting ? `<a class="day-go" href="#inspections/${esc(start.key)}">${open.length ? 'Vote on' : 'Go through'} ${esc(wd)}</a>` : ''}</div>`
-    run.forEach(({ l, i, c, key }) => {
-      html += `<a class="row" href="#inspections/${esc(key)}" data-key="${esc(key)}" data-c="${c}">
-        <span class="t">${esc(i.label.split(', ')[1] || '')}</span>
+    run.forEach(({ l, i, c, key, when }) => {
+      html += `<a class="row${when ? ' ' + when : ''}" href="#inspections/${esc(key)}" data-key="${esc(key)}" data-c="${c}">
+        <span class="t">${esc(i.label.split(', ')[1] || '')}${when ? ` <span class="tag ${when}">${when === 'now' ? 'On now' : 'Done'}</span>` : ''}</span>
         <span class="thumb">${l.thumb ? `<img src="${esc(l.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>
-        <span class="a"><b>${star(l)}${esc(l.address)}</b><br><span>${esc(l.suburb)} · ${money(l.price)}/wk</span></span>
+        <span class="a"><b>${star(l)}${esc(l.address)}</b><br><span>${esc(l.suburb)} · ${money(l.price)}/wk${c === 'gone' ? ' · <span class="tag gone">Gone</span>' : ''}</span></span>
         <span class="v">${Object.entries(VOTERS).map(([k, n]) => { const v = l[k + '_vote']; return `<span class="vote ${v || ''}" title="${n}">${k === state.who ? 'You' : n}: ${v ? VOTE_LABEL[v].toLowerCase() : '–'}</span>` }).join('')}</span>
       </a>`
     })
@@ -755,13 +777,13 @@ function showOnMap(id) {
 }
 // The pin's mini card: photo, rent, address, inspection, votes and the Enquired tick, with Open for the whole card.
 function pinCard(l, insp) {
-  const n = insp || nextInsp(l), el = document.createElement('div')
+  const n = insp || nextInsp(l), last = !n && lastInsp(l), el = document.createElement('div')
   el.className = 'pin-card'
   el.innerHTML = `${l.thumb ? `<img src="${esc(l.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="pin-body">
       <div class="pin-price">${money(l.price)}<small> /wk</small></div>
       <div><div class="pin-addr">${esc(l.address)}</div><div class="subn">${esc(l.suburb)}</div></div>
-      ${n ? `<div class="pin-when">Inspect ${esc(n.label)}</div>` : ''}
+      ${n ? `<div class="pin-when">Inspect ${esc(n.label)}</div>` : last ? `<div class="pin-when last">Last inspection ${esc(last.label)}</div>` : ''}
       ${votesLine(l)}
       ${enquiredBox(l, { short: true })}
       <button class="primary pin-open" type="button">Open</button>
@@ -804,9 +826,9 @@ function render() {
   if (!state.key || !API) return gate() // without a back end, stay on the sign-in page and its warning
   if (!state.who) return pickWho()
   const [r, ...sel] = route().split('/')
-  if (r !== 'inspections') state.keep.clear()
+  if (r !== 'inspections') { state.keep.clear(); state.inspPast = false }
   const sheetKey = r === 'inspections' && sel.length === 2 ? sel.join('/') : ''
-  if (sheetKey) { const id = decodeURIComponent(sel[0]), l = state.listings.find(x => x.id === id); if (l && !state.keep.has(id)) state.keep.set(id, combined(l) === 'out') }
+  if (sheetKey) { const id = decodeURIComponent(sel[0]), l = state.listings.find(x => x.id === id); if (l && !state.keep.has(id)) state.keep.set(id, votedOut(l)) }
   // An opened card: the deck's top card (#swipe/open) or a map pin's listing (#map/<id>).
   const cardFor = r === 'swipe' && sel[0] === 'open' ? queue()[0]
     : r === 'map' && sel.length ? state.listings.find(l => l.id === decodeURIComponent(sel.join('/'))) : null
@@ -856,6 +878,7 @@ function wire() {
   $('#more')?.addEventListener('click', openCard)
   document.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.f; render() }))
   document.querySelectorAll('[data-if]').forEach(b => b.addEventListener('click', () => { state.inspFilter = b.dataset.if; render() }))
+  document.querySelectorAll('[data-iw]').forEach(b => b.addEventListener('click', () => { state.inspPast = !!b.dataset.iw; state.keep.clear(); render(); window.scrollTo(0, 0) }))
   $('#sort')?.addEventListener('change', e => { state.sort = e.target.value; render() })
   document.querySelectorAll('.grid [data-v]').forEach(b => b.addEventListener('click', () => {
     const id = b.closest('.card').dataset.id, l = state.listings.find(x => x.id === id)

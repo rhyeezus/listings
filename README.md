@@ -1,6 +1,6 @@
 # Shortlist
 
-A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day, a map (pick a day to plan an inspection run: clashes and tight gaps flagged, and an Add to calendar), and a filterable grid. Tap any card for the whole listing (with a map of where it is) and any photo for the full-screen viewer.
+A small rental-hunting app for two people. A Google Sheet holds every listing and both sets of votes; a static web app on Vercel shows them as cards to vote on, an inspection run sheet grouped by day (today's inspections stay on it all day, and **Past** lists the last 30 days' so you can vote on the places you've seen), a map (pick a day to plan an inspection run: clashes and tight gaps flagged, and an Add to calendar), and a filterable grid. Tap any card for the whole listing (with a map of where it is) and any photo for the full-screen viewer.
 
 ```
 Google Sheet (Listings / Inbox / Search)
@@ -98,4 +98,4 @@ Vote columns take `yes`, `maybe`, `no` or blank. `maybe` is a **Favourite** (the
 
 The `Plan` tab holds the day planner's ticks, shared by both of you: one row per inspection (`<listing id>|<inspection>`), whether you're going, and who last changed it.
 
-Inspection times are written like `Wed 28 Oct, 4:45 - 5pm`, separated by `; `.
+Inspection times are written like `Wed 28 Oct, 4:45 - 5pm`, separated by `; `. When a rescan replaces a listing's times, the ones that have already happened move to `past_inspections` with their year (`Wed 28 Oct 2026, 4:45 - 5pm`), so the Inspections page's **Past** list can still show them. Rescans never clear it, and times dropped before they happened (cancelled or moved) aren't kept. The column is added to the end of the `Listings` tab the first time a rescan moves a time there.

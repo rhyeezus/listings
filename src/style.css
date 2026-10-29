@@ -83,6 +83,7 @@ h2 { font-size: 20px }
 .insp .when { font: 500 14px var(--f-data) }
 .insp.none { background: var(--bg) }
 .insp.none .when { color: var(--muted); font-family: var(--f-body) }
+.insp.none .lbl, .sc-when.none .lbl { color: var(--muted) }
 .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px }
 .note { font-size: 14px; margin: 0 }
 .links { display: flex; flex-wrap: wrap; gap: 8px }
@@ -201,6 +202,13 @@ textarea { width: 100%; font: inherit; font-size: 13px; border: 1px solid var(--
 .row .a b { font-weight: 600; color: var(--bay) }
 .row .a span { color: var(--muted); font-size: 13px }
 .row .v { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end }
+.segs { display: flex; flex-wrap: wrap; gap: 8px }
+/* Today's inspections stay listed all day: on now, or done. Past places since gone say so. */
+.row .tag { display: inline-block; margin-left: 2px; padding: 1px 7px; border-radius: 999px; font: 600 11px var(--f-body); vertical-align: 1px; white-space: nowrap }
+.row .tag.now { background: var(--primary); color: var(--primary-ink) }
+.row .tag.done { background: var(--line); color: var(--ink) }
+.row .a .tag.gone { margin-left: 0; background: var(--no-soft); color: var(--no) }
+.row.done .thumb { opacity: .6 }
 /* Phones: the photo on the left, with the time, address and votes stacked beside it. */
 @media (max-width: 600px) {
   .row { grid-template-columns: 96px minmax(0, 1fr); grid-template-areas: "thumb t" "thumb a" "thumb v"; gap: 2px 12px; align-items: start }
@@ -348,6 +356,7 @@ html.viewing { overflow: hidden }
 .pin-price small { font: 500 12px var(--f-body); color: var(--muted) }
 .pin-addr { font: 700 14px/1.25 var(--f-display) }
 .pin-when { font: 500 12px var(--f-data); color: var(--bay) }
+.pin-when.last { color: var(--muted) }
 .pin-card .votes { font-size: 12px }
 .pin-open { padding: 9px; margin-top: 2px }
 @media (max-width: 600px) { .map { --map-chrome: 420px } } /* the taller header and wrapped filters above, the key below */

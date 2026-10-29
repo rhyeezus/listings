@@ -27,15 +27,17 @@ const PLAN = 'Plan'; // the day planner's shared ticks (made on first use)
 const VOTERS = ['rhys', 'partner'];
 const VOTES = ['yes', 'maybe', 'no', ''];
 
-// Columns missing from the Listings tab (photos, description, photos_large and the enquired pair came later) are added to
-// the end of its header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
+// Columns missing from the Listings tab (photos, description, photos_large, the enquired pair and past_inspections came
+// later) are added to the end of its header row by ensureColumns_ before a merge, so the sheet never needs editing by hand.
 // enquired: the day either of you asked the agent about the place (the app's Enquired tick); enquired_by: who did.
+// past_inspections: inspection times that have happened, kept when a rescan replaces the listing's times (with the
+// year: "Thu 29 Oct 2026, 11am - 11:15am"), so the app can list past inspections.
 const COLUMNS = [
   'id', 'address', 'suburb', 'price', 'bond', 'type', 'beds', 'flooring', 'level', 'outdoor',
   'pets', 'inspections', 'available', 'agency', 'notes', 'photo_url', 'listing_url', 'lat', 'lng',
   'source', 'added_on', 'last_seen', 'status',
   'rhys_vote', 'partner_vote', 'rhys_note', 'partner_note',
-  'photos', 'description', 'photos_large', 'enquired', 'enquired_by'
+  'photos', 'description', 'photos_large', 'enquired', 'enquired_by', 'past_inspections'
 ];
 // Columns a rescan refreshes on an existing row whenever the scan has a value.
 // photos: the listing's photo URLs (card-sized), one per line. photos_large: the same photos uncropped and full
@@ -102,8 +104,8 @@ function doPost(e) {
 }
 
 // A Domain scan collected in a browser (scripts/domain-rescan.js), handed over by the app.
-// Only listing columns are accepted; votes, notes, the Enquired tick and status are never set from a scan.
-const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$|^enquired/.test(c) && ['added_on', 'last_seen', 'status'].indexOf(c) < 0);
+// Only listing columns are accepted; votes, notes, the Enquired tick, status and past inspections are never set from a scan.
+const IMPORT_FIELDS = COLUMNS.filter(c => !/_vote$|_note$|^enquired/.test(c) && ['added_on', 'last_seen', 'status', 'past_inspections'].indexOf(c) < 0);
 // Longest value kept per field (a sheet cell holds up to 50,000 characters).
 const MAX_LENGTH = { photos: 20000, description: 10000, photos_large: 20000 };
 function importScan_(b) {
@@ -396,6 +398,29 @@ function inspection_(from, to) {
   return `${wd} ${d} ${MONTHS[mo - 1]}, ${t(from)} - ${t(to)}`;
 }
 
+// past_inspections once a rescan replaces a listing's inspection times (old -> next): the times in old that have
+// started by now and aren't in next are added to past, with their year ("Thu 29 Oct 2026, 11am - 11:15am"), since a
+// time months back would otherwise read as next year's. A time dropped before it happened (cancelled or moved) is left out.
+function pastInspections_(old, next, past, now) {
+  const list = s => String(s || '').split(';').map(t => t.trim()).filter(Boolean);
+  const pad = n => String(n).padStart(2, '0');
+  const mins = (h, mi, ap) => (+h % 12 + (ap.toLowerCase() === 'pm' ? 12 : 0)) * 60 + +(mi || 0);
+  const nowKey = Utilities.formatDate(now || new Date(), 'Australia/Melbourne', "yyyy-MM-dd'T'HH:mm");
+  const year = +nowKey.slice(0, 4), month = +nowKey.slice(5, 7) - 1;
+  const keep = list(next), out = list(past);
+  list(old).filter(t => keep.indexOf(t) < 0).forEach(t => {
+    const m = t.match(/^\w{3} (\d{1,2}) (\w{3})(?: (\d{4}))?,\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    const mo = m ? MONTHS.indexOf(m[2]) : -1;
+    if (mo < 0) return;
+    const y = m[3] ? +m[3] : mo < month - 6 ? year + 1 : mo > month + 6 ? year - 1 : year; // the closest such day to now, as the app reads it
+    let start = mins(m[4], m[5], m[6] || m[9]);
+    if (!m[6] && start > mins(m[7], m[8], m[9])) start -= 12 * 60; // "11:45 - 12:05pm" starts in the morning
+    const dated = t.replace(/^(\w{3} \d{1,2} \w{3})(?: \d{4})?,/, `$1 ${y},`);
+    if (`${y}-${pad(mo + 1)}-${pad(m[1])}T${pad(Math.floor(start / 60))}:${pad(start % 60)}` <= nowKey && out.indexOf(dated) < 0) out.push(dated);
+  });
+  return out.join('; ');
+}
+
 // "2026-11-03T00:00:00" -> "03 Nov 2026", or "Now" once that day has come (the browser scan's format).
 function available_(iso) {
   const m = String(iso || '').match(/(\d{4})-(\d{2})-(\d{2})/);
@@ -481,6 +506,12 @@ function mergeListings_(incoming, full, goneScope) {
         SCAN_FIELDS.forEach(f => {
           if (n[f] !== undefined && n[f] !== '' && String(n[f]) !== String(rows[i][f])) {
             sheet.getRange(rowNum, header.indexOf(f) + 1).setValue(n[f]);
+            // Times the new list drops once they've happened move to past_inspections (plain text, so the sheet
+            // doesn't read one as a date).
+            const past = f === 'inspections' && pastInspections_(rows[i].inspections, n.inspections, rows[i].past_inspections);
+            if (past !== false && past !== String(rows[i].past_inspections || '')) {
+              sheet.getRange(rowNum, header.indexOf('past_inspections') + 1).setNumberFormat('@').setValue(past);
+            }
           }
         });
         FILL_FIELDS.forEach(f => {
@@ -496,7 +527,7 @@ function mergeListings_(incoming, full, goneScope) {
         COLUMNS.forEach(c => o[c] = n[c] !== undefined ? n[c] : '');
         o.added_on = today; o.last_seen = today; o.status = 'active';
         VOTERS.forEach(v => { o[v + '_vote'] = ''; o[v + '_note'] = ''; });
-        o.enquired = ''; o.enquired_by = '';
+        o.enquired = ''; o.enquired_by = ''; o.past_inspections = '';
         newRows.push(header.map(h => o[h] !== undefined ? o[h] : ''));
         added++;
       }
